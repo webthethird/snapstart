@@ -164,8 +164,27 @@ runcmd:
     vol_id="$existing_vol"
   else
     local out
-    out=$(api POST /volumes "$(jq -n --arg n "$NAME" --argjson s "$VOLUME_GB" --argjson srv "$server_id" \
-      '{name:$n,size:$s,server:$srv,automount:true,format:"ext4"}')")
+    # Hetzner caps volume storage per account, and new accounts sit below the
+    # snapchain docs' recommended 2 TB — this account's ceiling is 1024 GB, found
+    # by probing a resize to 1030 GB. A tutorial that dies here with a raw API
+    # error strands people with a half-built, billing server, so say what happened
+    # and what to do about it.
+    if ! out=$(api POST /volumes "$(jq -n --arg n "$NAME" --argjson s "$VOLUME_GB" --argjson srv "$server_id" \
+      '{name:$n,size:$s,server:$srv,automount:true,format:"ext4"}')" 2>&1); then
+      if echo "$out" | grep -q resource_limit_exceeded; then
+        die "Hetzner refused a ${VOLUME_GB} GB volume: your account's storage quota is lower.
+
+New Hetzner accounts are commonly capped at 1024 GB. Either ask Hetzner support to
+raise it, or provision within the cap:
+
+    SNAPSTART_VOLUME_GB=1024 ./snapstart provision
+
+The server has been created and IS BILLING. Remove it with:
+
+    ./snapstart destroy"
+      fi
+      die "creating volume failed: $out"
+    fi
     check "$out" "creating volume"
     vol_id=$(echo "$out" | jq -r '.volume.id')
   fi
