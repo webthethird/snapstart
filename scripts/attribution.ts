@@ -17,8 +17,8 @@
  * reading snapchain's http_server.rs.
  */
 import { decodeGaslessSignedKeyRequestMetadata } from "@farcaster/core";
-import { decodeAbiParameters, hexToBytes } from "viem";
-import { Snapchain, getProfile, type Message } from "./snapchain.js";
+import { bytesToHex, decodeAbiParameters, hexToBytes } from "viem";
+import { Snapchain, getProfile, type Message, type Signer } from "./snapchain.js";
 
 /**
  * How a key came to be authorized. Worth surfacing in a UI: a `self` key means
@@ -51,9 +51,19 @@ const SIGNED_KEY_REQUEST_METADATA = [
 
 export const UNKNOWN_CLIENT: ClientInfo = { source: "unknown" };
 
-function toHex(value: unknown): `0x${string}` | undefined {
-  if (typeof value !== "string") return undefined;
-  return (value.startsWith("0x") ? value : `0x${value}`) as `0x${string}`;
+/**
+ * Metadata arrives base64-encoded, unlike the hex used everywhere else in this
+ * API. Decoding it as hex silently yields nothing and every cast then reports as
+ * an unknown client — which looks like "attribution doesn't work" rather than a
+ * bug.
+ */
+function metadataToBytes(metadata: string): Uint8Array | undefined {
+  try {
+    if (metadata.startsWith("0x")) return hexToBytes(metadata as `0x${string}`);
+    return new Uint8Array(Buffer.from(metadata, "base64"));
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -63,14 +73,19 @@ function toHex(value: unknown): `0x${string}` | undefined {
  * ABI — the encodings are identical, only the EIP-712 domain the signature covers
  * differs, and attribution does not care about the signature.
  */
-function requestFidFromMetadata(metadataHex: `0x${string}`): number | undefined {
-  const bytes = hexToBytes(metadataHex);
+function requestFidFromMetadata(metadata: string): number | undefined {
+  const bytes = metadataToBytes(metadata);
+  if (!bytes || bytes.length === 0) return undefined;
 
+  // Verified against a live node: onchain and gasless registrations ABI-encode
+  // the same SignedKeyRequestMetadata struct, so one decoder serves both. Only
+  // the EIP-712 domain the signature covers differs, and attribution does not
+  // check the signature.
   const gasless = decodeGaslessSignedKeyRequestMetadata(bytes);
   if (gasless.isOk()) return Number(gasless.value.requestFid);
 
   try {
-    const [decoded] = decodeAbiParameters(SIGNED_KEY_REQUEST_METADATA, metadataHex);
+    const [decoded] = decodeAbiParameters(SIGNED_KEY_REQUEST_METADATA, bytesToHex(bytes));
     return Number((decoded as { requestFid: bigint }).requestFid);
   } catch {
     // Pre-SignedKeyRequest keys, or metadata this client does not understand.
@@ -78,31 +93,9 @@ function requestFidFromMetadata(metadataHex: `0x${string}`): number | undefined 
   }
 }
 
-/**
- * The response shapes of /v1/signer and /v1/onChainSignersByFid are not documented,
- * so dig for a metadata field rather than assuming one path. Confirmed shapes
- * should replace this once a live node has been queried.
- */
-function findMetadata(payload: unknown, depth = 0): `0x${string}` | undefined {
-  if (!payload || typeof payload !== "object" || depth > 4) return undefined;
-  const record = payload as Record<string, unknown>;
-
-  for (const key of ["metadata", "signerMetadata", "keyMetadata"]) {
-    const hex = toHex(record[key]);
-    if (hex && hex.length > 2) return hex;
-  }
-  for (const value of Object.values(record)) {
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        const found = findMetadata(item, depth + 1);
-        if (found) return found;
-      }
-    } else if (value && typeof value === "object") {
-      const found = findMetadata(value, depth + 1);
-      if (found) return found;
-    }
-  }
-  return undefined;
+/** Gasless keys carry metadata directly; onchain ones nest it in the event. */
+function metadataOf(signer: Signer): string | undefined {
+  return signer.metadata ?? signer.onChainEvent?.signerEventBody?.metadata;
 }
 
 /**
@@ -114,7 +107,8 @@ function findMetadata(payload: unknown, depth = 0): `0x${string}` | undefined {
  * heavily per author, and app FIDs repeat across every user of that app.
  */
 export class ClientResolver {
-  private readonly signerCache = new Map<string, ClientInfo>();
+  /** authorFid -> (signer key -> who registered it) */
+  private readonly byAuthor = new Map<number, Map<string, ClientInfo>>();
   private readonly nameCache = new Map<number, string | undefined>();
 
   constructor(private readonly node: Snapchain) {}
@@ -127,55 +121,51 @@ export class ClientResolver {
     return name;
   }
 
-  async resolve(authorFid: number, signer: string): Promise<ClientInfo> {
-    const cached = this.signerCache.get(signer);
+  /**
+   * One request per author, not per signer. `/v1/signersByFid` returns every key
+   * an account has registered, so a feed of 50 casts from 20 authors costs 20
+   * lookups rather than 50 — and most authors appear many times.
+   */
+  private async signersFor(authorFid: number): Promise<Map<string, ClientInfo>> {
+    const cached = this.byAuthor.get(authorFid);
     if (cached) return cached;
 
-    const info = await this.lookup(authorFid, signer);
-    this.signerCache.set(signer, info);
-    return info;
-  }
-
-  private async lookup(authorFid: number, signer: string): Promise<ClientInfo> {
-    let requestFid: number | undefined;
-    let source: AttributionSource = "unknown";
-
-    // Gasless keys (FIP-272) are the current path.
+    const map = new Map<string, ClientInfo>();
     try {
-      const metadata = findMetadata(await this.node.signer(authorFid, signer));
-      if (metadata) {
-        requestFid = requestFidFromMetadata(metadata);
-        if (requestFid !== undefined) source = "gasless";
+      const { signers } = await this.node.signersByFid(authorFid);
+      for (const signer of signers) {
+        const metadata = metadataOf(signer);
+        const requestFid = metadata ? requestFidFromMetadata(metadata) : undefined;
+
+        // `source` is reported by the node, so there is nothing to infer.
+        const source: AttributionSource =
+          requestFid === undefined
+            ? "unknown"
+            : requestFid === authorFid
+              ? "self"
+              : signer.source === "SIGNER_SOURCE_ONCHAIN"
+                ? "onchain"
+                : "gasless";
+
+        map.set(signer.key.toLowerCase(), { requestFid, source, name: undefined });
       }
     } catch {
-      // Fall through to the onchain path.
+      // Leave the map empty; every signer then resolves to unknown rather than
+      // the feed failing.
     }
+    this.byAuthor.set(authorFid, map);
+    return map;
+  }
 
-    // Keys registered the old way, by a transaction to the KeyRegistry on Optimism.
-    // Still common: clients that predate FIP-272 register this way, so casts from
-    // them resolve here or not at all.
-    if (requestFid === undefined) {
-      try {
-        const metadata = findMetadata(await this.node.onChainSignersByFid(authorFid));
-        if (metadata) {
-          requestFid = requestFidFromMetadata(metadata);
-          if (requestFid !== undefined) source = "onchain";
-        }
-      } catch {
-        // Genuinely unattributable.
-      }
-    }
+  async resolve(authorFid: number, signer: string): Promise<ClientInfo> {
+    const signers = await this.signersFor(authorFid);
+    const hit = signers.get(signer.toLowerCase());
+    if (!hit || hit.requestFid === undefined) return UNKNOWN_CLIENT;
 
-    if (requestFid === undefined) return UNKNOWN_CLIENT;
-
-    // A key an account issued to itself. No third-party app is involved — someone
-    // ran their own script or their own client, which is exactly what our test
-    // account does, so expect to see this on our own casts.
-    if (requestFid === authorFid) {
-      return { requestFid, source: "self", name: await this.nameOf(requestFid) };
-    }
-
-    return { requestFid, source, name: await this.nameOf(requestFid) };
+    // Resolve the app's display name lazily — app FIDs repeat across every user
+    // of that app, so this is almost always a cache hit.
+    if (hit.name === undefined) hit.name = await this.nameOf(hit.requestFid);
+    return hit;
   }
 }
 

@@ -46,6 +46,45 @@ export type Message = {
   };
 };
 
+/**
+ * A registered signer. `source` distinguishes the two registration paths without
+ * having to infer it: SIGNER_SOURCE_ONCHAIN came from a KeyRegistry transaction,
+ * gasless keys (FIP-272) report their own source.
+ */
+export type Signer = {
+  source: string;
+  key: string;
+  keyType: number;
+  fid: number;
+  addedAt: number;
+  /** Present on onchain registrations. */
+  onChainEvent?: {
+    signerEventBody?: {
+      key: string;
+      /** base64-encoded ABI SignedKeyRequestMetadata. */
+      metadata?: string;
+      metadataType?: number;
+    };
+  };
+  /** Present on gasless registrations. */
+  metadata?: string;
+  metadataType?: number;
+};
+
+export type SignersResponse = {
+  signers: Signer[];
+  nextPageToken?: string;
+  gaslessSignerCount: number;
+  /** Matches MAX_GASLESS_KEYS_PER_FID; surfaced so clients can render "x/y". */
+  gaslessSignerLimit: number;
+  /**
+   * The next valid KEY_ADD nonce must be STRICTLY GREATER than this. 0 means no
+   * gasless activity yet, so a first key uses nonce 1.
+   */
+  currentUserNonce: number;
+  requesterFidNonces?: Record<string, number>;
+};
+
 export class SnapchainError extends Error {
   constructor(
     message: string,
@@ -102,13 +141,19 @@ export class Snapchain {
     }>("/v1/info");
   }
 
-  /** Casts authored by one FID, newest first by default. */
+  /**
+   * Casts authored by one FID, newest first by default.
+   *
+   * `reverse` must be the string "true"/"false". The published HTTP API
+   * reference says to set it to 1, which the node rejects with
+   * "provided string was not `true` or `false`".
+   */
   castsByFid(fid: number, opts: { pageSize?: number; pageToken?: string; reverse?: boolean } = {}) {
     return this.get<Paged<Message>>("/v1/castsByFid", {
       fid,
       pageSize: opts.pageSize ?? 25,
       pageToken: opts.pageToken,
-      reverse: opts.reverse === false ? undefined : 1,
+      reverse: opts.reverse === false ? undefined : true,
     });
   }
 
@@ -161,15 +206,23 @@ export class Snapchain {
   }
 
   /**
-   * Look up one signer for one FID. Given a cast's `signer`, this is what tells you
-   * which app registered that key — and therefore which client posted the cast.
+   * Every signer registered for one FID, plus the nonce state needed to add
+   * another. Shapes below were taken from a live node, not from documentation —
+   * `/v1/signersByFid` is absent from the published HTTP API reference.
+   *
+   * Note `metadata` is base64, not the hex the rest of this API uses.
    */
-  signer(fid: number, signer: string) {
-    return this.get<unknown>("/v1/signer", { fid, signer });
+  signersByFid(fid: number, opts: { pageSize?: number; pageToken?: string } = {}) {
+    return this.get<SignersResponse>("/v1/signersByFid", {
+      fid,
+      pageSize: opts.pageSize ?? 100,
+      pageToken: opts.pageToken,
+    });
   }
 
-  signersByFid(fid: number) {
-    return this.get<Paged<unknown>>("/v1/signersByFid", { fid, pageSize: 100 });
+  /** A single signer, when you already know the key. */
+  signer(fid: number, signer: string) {
+    return this.get<{ signer?: Signer }>("/v1/signer", { fid, signer });
   }
 
   /** Signers registered the old way, via an Optimism transaction to the KeyRegistry. */
