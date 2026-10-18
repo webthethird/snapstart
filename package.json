@@ -10,7 +10,9 @@
   "scripts": {
     "new-account": "tsx --env-file-if-exists=.env scripts/new-test-account.ts",
     "price": "tsx --env-file-if-exists=.env scripts/price.ts",
-    "register": "tsx --env-file-if-exists=.env scripts/register-fid.ts"
+    "register": "tsx --env-file-if-exists=.env scripts/register-fid.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && tsx scripts/test-app-key.ts && tsx scripts/test-attribution.ts"
   },
   "dependencies": {
     "@farcaster/core": "^0.20.0",

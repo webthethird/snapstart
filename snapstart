@@ -367,6 +367,49 @@ cmd_tunnel() {
     -L 3381:localhost:3381 "root@$ip"
 }
 
+# Grow the data volume without destroying anything.
+#
+# Needed more often than you would hope: the restore holds the compressed chunks
+# AND the unpacked database at the same time — chunks are not deleted as they are
+# unzipped — so peak usage is far above the final footprint.
+#
+# Hetzner volumes can only ever grow, never shrink. Resizing the volume is online
+# and safe; resize2fs then extends the filesystem over the new space, also online.
+cmd_volume_grow() {
+  need jq; load_token
+  local new_gb="${1:-}"
+  [ -n "$new_gb" ] || die "usage: ./snapstart volume grow <GB>"
+  [ -f "$STATE_FILE" ] || die "nothing provisioned yet."
+
+  local vid current
+  vid=$(jq -r .volume_id "$STATE_FILE")
+  current=$(api GET "/volumes/$vid" | jq -r '.volume.size')
+  [ "$new_gb" -gt "$current" ] || die "volume is already ${current} GB; it cannot shrink."
+
+  info "growing volume $current GB -> $new_gb GB"
+  api POST "/volumes/$vid/actions/resize" "$(jq -n --argjson s "$new_gb" '{size:$s}')" >/dev/null \
+    || die "resize failed"
+
+  # The cloud-side resize is async; wait for it to report the new size.
+  for _ in $(seq 1 60); do
+    [ "$(api GET "/volumes/$vid" | jq -r '.volume.size')" = "$new_gb" ] && break
+    sleep 5
+  done
+
+  info "extending filesystem (online, node keeps running)"
+  node_ssh "
+    set -e
+    dev=/dev/disk/by-id/scsi-0HC_Volume_$vid
+    e2fsck -f -p \"\$dev\" >/dev/null 2>&1 || true
+    resize2fs \"\$dev\"
+    df -h /mnt/snapchain | tail -1
+  " || die "filesystem resize failed"
+
+  jq --argjson gb "$new_gb" '.volume_gb = $gb' "$STATE_FILE" > "$STATE_FILE.tmp" \
+    && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  info "done"
+}
+
 cmd_ssh() {
   need jq
   [ -f "$STATE_FILE" ] || die "nothing provisioned yet."
@@ -427,6 +470,12 @@ case "${1:-}" in
       status) shift; cmd_node_status "$@" ;;
       logs)   shift; cmd_node_logs "$@" ;;
       *) die "usage: ./snapstart node {up|status|logs}" ;;
+    esac ;;
+  volume)
+    shift
+    case "${1:-}" in
+      grow) shift; cmd_volume_grow "$@" ;;
+      *) die "usage: ./snapstart volume grow <GB>" ;;
     esac ;;
   status)    shift; cmd_status "$@" ;;
   tunnel)    shift; cmd_tunnel "$@" ;;

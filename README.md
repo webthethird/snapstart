@@ -30,22 +30,37 @@ several are badly out of date. Everything here is read off a live system:
 |---|---|---|
 | FID registration + storage | ~$10 | **~$0.20** (`IdGateway.price()`, 2026-10-17) |
 | Snapshot restore time | "up to 2 hours" | ~3.5 h reported by the node itself |
-| Node disk | 1.5 TB (repo README) / 2 TB (guides) | *measuring — see below* |
+| Node disk | 1.5 TB (repo README) / 2 TB (guides) | *measuring — but see below, 2 TB looks right* |
 
 `npm run price` reads the current registration cost straight off Optimism. Don't
 trust the table above either — run it.
 
-### On the default volume size
+### On disk: the 2 TB in the docs is probably right
 
-The guides say 2 TB. This provisions **1 TB**, because the node reports its snapshot
-as 5,689 chunks of ~82 MB across 3 shards — roughly 470 GB — and volume storage is
-the single largest line on the bill. Halving it roughly halves the monthly cost.
+An earlier version of this file argued 1 TB was enough, reasoning from the size of
+the compressed download. That was wrong, and the reason is worth knowing before you
+provision anything.
 
-That is a measurement in progress, not a settled fact: the decompressed database may
-exceed the compressed snapshot. So `node status` warns at 80% full, Hetzner volumes
-can be grown without destroying anything, and if you would rather not think about
-it, `SNAPSTART_VOLUME_GB=2048 ./snapstart provision` gives you the documented size.
-This README will carry the final number once the restore completes.
+Restoring is a **three-stage pipeline**, and the stages overlap on disk:
+
+```
+1. download   .rocks.snapshot/shard-N/chunk_*.bin     2,671 files, 222 GB (shard 1)
+2. assemble   .rocks.snapshot/shard_N_snapshot.tar    concatenated from those chunks
+3. extract    .rocks/                                 the actual RocksDB
+```
+
+Shard 1's chunks are still on disk while its tar is being built, so peak usage is
+a multiple of the final database size — and shard 1 is only 2,671 of 5,689 chunks.
+
+**Hetzner Cloud caps new accounts at 1024 GB of volume storage.** Verified by probe:
+a resize to 1030 GB is refused with `resource_limit_exceeded`. If the pipeline does
+not clean up after each shard, a new Hetzner account cannot complete a restore
+without requesting a quota increase first. That is a real barrier and this README
+will say which it is once measured.
+
+Until then: `node status` warns at 80% full, `./snapstart volume grow <GB>` resizes
+online without destroying anything, and `SNAPSTART_VOLUME_GB=2048` provisions the
+documented size if your account allows it.
 
 ## Safety
 
