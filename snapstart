@@ -20,7 +20,6 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 STATE_DIR=".state"
-STATE_FILE="$STATE_DIR/node.json"
 SSH_KEY="$STATE_DIR/id_snapstart"
 API="https://api.hetzner.cloud/v1"
 
@@ -42,6 +41,14 @@ NAME="snapstart-node"
 # Hetzner remains supported and is roughly a third the price — but only if your
 # account's quota has been raised. See README.
 PROVIDER="${SNAPSTART_PROVIDER:-aws}"
+
+# State is per-provider. A single node.json meant provisioning on AWS silently
+# clobbered the record of a running Hetzner node — leaving a billing server with
+# no local trace of how to reach or destroy it. Keyed by provider, the two
+# coexist and `SNAPSTART_PROVIDER=hetzner ./snapstart status` targets the right
+# one. A legacy node.json is still honoured so older state keeps working.
+STATE_FILE="$STATE_DIR/node-$PROVIDER.json"
+[ -f "$STATE_FILE" ] || [ ! -f "$STATE_DIR/node.json" ] || STATE_FILE="$STATE_DIR/node.json"
 
 # --- AWS -------------------------------------------------------------------
 #   m5.xlarge   4 vCPU / 16 GB — the instance the Snapchain docs specify
