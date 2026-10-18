@@ -686,6 +686,63 @@ cmd_node_status() {
 
 cmd_node_logs() { node_ssh "docker logs --tail \${1:-40} -f snapchain-snapchain-1 2>&1"; }
 
+# Is this node actually usable, per shard?
+#
+# "The API responds" and "the database has data" are both weaker than they look.
+# A node whose shard 0 never restored serves /v1/info happily, reports hundreds
+# of millions of messages, answers every read correctly — and silently rejects
+# every write, because KEY_ADD routes to shard 0 and the block engine there has
+# no registration state. We lost hours to exactly that.
+#
+# Readiness means every shard the network has is present AND close to the tip.
+cmd_node_ready() {
+  need jq
+  [ -f "$STATE_FILE" ] || die "nothing provisioned yet."
+
+  # `|| true`: a node that is still restoring refuses the connection, and curl's
+  # non-zero exit would otherwise abort under `set -e` before we can say so.
+  local info
+  info=$(node_ssh "curl -s --max-time 8 http://localhost:3381/v1/info" 2>/dev/null || true)
+  if [ -z "$info" ] || ! echo "$info" | jq -e .shardInfos >/dev/null 2>&1; then
+    echo "  not ready: node is not serving (still restoring, or down)"
+    echo "  watch with: ./snapstart node status"
+    return 1
+  fi
+
+  # blockDelay is roughly blocks behind the tip, and blocks are ~1s apart, so
+  # this threshold is about "within a couple of minutes".
+  local max_delay="${SNAPSTART_MAX_BLOCK_DELAY:-100}"
+  local lagging=0
+
+  echo
+  printf "  %-8s %14s %14s %16s  %s\n" "shard" "height" "delay" "messages" "state"
+  while IFS=$'\t' read -r id height delay msgs; do
+    local state="ok"
+    if [ "$delay" -gt "$max_delay" ] 2>/dev/null; then
+      state="LAGGING (~$((delay / 60))m behind)"
+      lagging=1
+    fi
+    printf "  %-8s %14s %14s %16s  %s\n" "$id" "$height" "$delay" "$msgs" "$state"
+  done < <(echo "$info" | jq -r '.shardInfos | sort_by(.shardId)[] | [.shardId, .maxHeight, .blockDelay, .numMessages] | @tsv')
+
+  # Shard 0 carries gasless keys and storage lends. It holds no user messages, so
+  # a message-count check would call an empty shard 0 healthy — it is the exact
+  # shard that fails silently.
+  if ! echo "$info" | jq -e '.shardInfos[] | select(.shardId == 0)' >/dev/null 2>&1; then
+    echo
+    echo "  not ready: shard 0 is absent. Writes will fail — KEY_ADD routes there."
+    return 1
+  fi
+
+  echo
+  if [ "$lagging" = 1 ]; then
+    echo "  NOT READY: at least one shard is behind the tip."
+    echo "  Reads may look fine while writes fail. Wait, or re-bootstrap."
+    return 1
+  fi
+  echo "  ready: all shards present and within $max_delay blocks of the tip"
+}
+
 # Forward the node's HTTP port to localhost rather than opening 3381 to the world.
 # The firewall deliberately exposes 3381-3383 for gossip, but an RPC endpoint that
 # anyone can query (or submit to) is a different matter — and grafana on :3000 is
@@ -880,8 +937,9 @@ case "${1:-}" in
     case "${1:-}" in
       up)     shift; cmd_node_up "$@" ;;
       status) shift; cmd_node_status "$@" ;;
+      ready)  shift; cmd_node_ready "$@" ;;
       logs)   shift; cmd_node_logs "$@" ;;
-      *) die "usage: ./snapstart node {up|status|logs}" ;;
+      *) die "usage: ./snapstart node {up|status|ready|logs}" ;;
     esac ;;
   volume)
     shift
