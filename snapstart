@@ -320,6 +320,20 @@ cmd_node_status() {
 
 cmd_node_logs() { node_ssh "docker logs --tail \${1:-40} -f snapchain-snapchain-1 2>&1"; }
 
+# Forward the node's HTTP port to localhost rather than opening 3381 to the world.
+# The firewall deliberately exposes 3381-3383 for gossip, but an RPC endpoint that
+# anyone can query (or submit to) is a different matter — and grafana on :3000 is
+# not exposed at all. Tunnelling keeps the client's view private without widening
+# the firewall.
+cmd_tunnel() {
+  need jq
+  [ -f "$STATE_FILE" ] || die "nothing provisioned yet."
+  local ip; ip=$(jq -r .ip "$STATE_FILE")
+  info "forwarding localhost:3381 -> $ip:3381 (ctrl-c to stop)"
+  exec ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -N \
+    -L 3381:localhost:3381 "root@$ip"
+}
+
 cmd_ssh() {
   need jq
   [ -f "$STATE_FILE" ] || die "nothing provisioned yet."
@@ -353,6 +367,7 @@ case "${1:-}" in
       *) die "usage: ./snapstart node {up|status|logs}" ;;
     esac ;;
   status)    shift; cmd_status "$@" ;;
+  tunnel)    shift; cmd_tunnel "$@" ;;
   ssh)       shift; cmd_ssh "$@" ;;
   destroy)   shift; cmd_destroy "$@" ;;
   *) sed -n '3,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
