@@ -234,7 +234,8 @@ Nothing has been created, and you have not been billed."
     # The root volume carries everything. No separate EBS volume means nothing to
     # attach, format, mount, or forget to mount — the single biggest simplification
     # over the Hetzner path.
-    instance_id=$(aws_ec2 run-instances \
+    local run_out
+    if ! run_out=$(aws_ec2 run-instances \
       --image-id "$ami" \
       --instance-type "$AWS_INSTANCE_TYPE" \
       --key-name "$NAME" \
@@ -242,7 +243,37 @@ Nothing has been created, and you have not been billed."
       --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":$AWS_DISK_GB,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
       --user-data "$CLOUD_INIT" \
       --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME}]" \
-      --query 'Instances[0].InstanceId' --output text)
+      --query 'Instances[0].InstanceId' --output text 2>&1); then
+
+      # Accounts created after 2025-07-15 land on the AWS "Free Plan", which does
+      # not merely cap spending — it refuses to launch any instance type that is
+      # not free-tier eligible. The largest eligible type is m7i-flex.large at
+      # 2 vCPU / 8 GiB, and snapchain needs 4 vCPU / 16 GiB, so no eligible type
+      # can run a node. This is not a quota you can request an increase for.
+      if echo "$run_out" | grep -q "not eligible for Free Tier"; then
+        die "Your AWS account is on the Free Plan, which cannot launch $AWS_INSTANCE_TYPE.
+
+The Free Plan only permits free-tier-eligible instance types. The largest of those
+is m7i-flex.large (2 vCPU, 8 GiB) and Snapchain needs 4 vCPU and 16 GiB, so no
+eligible type is large enough. Raising a quota will not help.
+
+Upgrade to a Paid Plan in the Billing and Cost Management console, then re-run
+this command. Your free credits still apply — they offset the bill rather than
+being forfeited.
+
+Nothing has been created, and you have not been billed."
+      fi
+
+      if echo "$run_out" | grep -qi "VcpuLimitExceeded"; then
+        die "Your account's on-demand vCPU limit is too low for $AWS_INSTANCE_TYPE.
+
+Request an increase for 'Running On-Demand Standard instances' in the Service
+Quotas console. Nothing has been created."
+      fi
+
+      die "run-instances failed: $run_out"
+    fi
+    instance_id="$run_out"
   else
     info "instance (exists)"
   fi
