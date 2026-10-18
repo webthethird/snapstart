@@ -8,9 +8,15 @@ Run your own Farcaster read node and a client that talks to it, in three command
 ./snapstart client create  # (2) issue an app key and launch the client
 ```
 
-The node runs on infrastructure you own and needs **no API keys from anyone**. The
-only credential involved is a cloud API token used once to create the server, which
-you can delete the moment provisioning finishes.
+The node runs on infrastructure you own and needs **no API keys from anyone** — no
+RPC endpoint, no hosted data provider, no signup. Once it is running it holds no
+credentials at all.
+
+The one credential in the picture is a **cloud API token**, and it belongs to the
+provisioning CLI rather than to the node. `provision`, `status` and `destroy` all
+talk to your cloud provider and need it; `node` and `client` do not. Keep it until
+you have torn the server down, or delete it now and issue a fresh one when you do —
+just don't delete it and assume cleanup will still work.
 
 > **Status: work in progress.** Commands (1) and (2) are still being built. Nothing
 > here should be considered stable yet.
@@ -23,10 +29,23 @@ several are badly out of date. Everything here is read off a live system:
 | Claim | Documented | Measured |
 |---|---|---|
 | FID registration + storage | ~$10 | **~$0.20** (`IdGateway.price()`, 2026-10-17) |
-| Node disk | 1.5 TB (README) / 2 TB (guides) | *in progress* |
+| Snapshot restore time | "up to 2 hours" | ~3.5 h reported by the node itself |
+| Node disk | 1.5 TB (repo README) / 2 TB (guides) | *measuring — see below* |
 
 `npm run price` reads the current registration cost straight off Optimism. Don't
 trust the table above either — run it.
+
+### On the default volume size
+
+The guides say 2 TB. This provisions **1 TB**, because the node reports its snapshot
+as 5,689 chunks of ~82 MB across 3 shards — roughly 470 GB — and volume storage is
+the single largest line on the bill. Halving it roughly halves the monthly cost.
+
+That is a measurement in progress, not a settled fact: the decompressed database may
+exceed the compressed snapshot. So `node status` warns at 80% full, Hetzner volumes
+can be grown without destroying anything, and if you would rather not think about
+it, `SNAPSTART_VOLUME_GB=2048 ./snapstart provision` gives you the documented size.
+This README will carry the final number once the restore completes.
 
 ## Safety
 

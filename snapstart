@@ -44,14 +44,25 @@ load_token() {
   [ -n "${HETZNER_TOKEN:-}" ] || die "No HETZNER_TOKEN. Put it in .env — see .env.example."
 }
 
+# curl exits 0 on an HTTP 4xx/5xx unless told otherwise, which is how a failed
+# delete can look like a successful one. Capture the status code and fail loudly.
 api() {
-  local method="$1" path="$2" body="${3:-}"
+  local method="$1" path="$2" body="${3:-}" resp code payload
   if [ -n "$body" ]; then
-    curl -sS -X "$method" -H "Authorization: Bearer $HETZNER_TOKEN" \
-      -H "Content-Type: application/json" -d "$body" "$API$path"
+    resp=$(curl -sS -w $'\n%{http_code}' -X "$method" \
+      -H "Authorization: Bearer $HETZNER_TOKEN" -H "Content-Type: application/json" \
+      -d "$body" "$API$path") || return 1
   else
-    curl -sS -X "$method" -H "Authorization: Bearer $HETZNER_TOKEN" "$API$path"
+    resp=$(curl -sS -w $'\n%{http_code}' -X "$method" \
+      -H "Authorization: Bearer $HETZNER_TOKEN" "$API$path") || return 1
   fi
+  code="${resp##*$'\n'}"
+  payload="${resp%$'\n'*}"
+  if [ "$code" -ge 400 ]; then
+    echo "HTTP $code from $method $path: $payload" >&2
+    return 1
+  fi
+  echo "$payload"
 }
 
 # Hetzner returns {"error": {...}} on failure with a 2xx-looking body in places,
@@ -92,18 +103,32 @@ cmd_provision() {
   key_id=$(find_or_create ssh_keys \
     "$(jq -n --arg n "$NAME" --arg k "$(cat "$SSH_KEY.pub")" '{name:$n,public_key:$k}')")
 
-  # 3381-3383 on BOTH tcp and udp: snapchain gossips over QUIC as well as TCP,
-  # and a node with only TCP open will appear to start fine and then never sync.
-  info "firewall (22/tcp, 3381-3383 tcp+udp)"
+  # The docs say to expose 3381-3383 on both TCP and UDP. Checking what actually
+  # listens on a running node, only three of those six combinations are used:
+  #
+  #   3381/tcp  HTTP API   — client-facing; peers never call it, so keep it CLOSED
+  #                          and reach it through ./snapstart tunnel instead
+  #   3382/udp  gossip     — must be public for peering
+  #   3383/tcp  peer sync  — must be public
+  #
+  # Worth knowing: grafana also binds 0.0.0.0:3000 and statsd 0.0.0.0:8125. Nothing
+  # in snapchain stops that, so on a host without a cloud firewall they are simply
+  # exposed. Here the firewall is the only thing keeping them private.
+  local ssh_from="${SNAPSTART_SSH_FROM:-0.0.0.0/0}"
+  info "firewall (22/tcp from $ssh_from, 3382/udp + 3383/tcp)"
   local fw_id
-  fw_id=$(find_or_create firewalls "$(jq -n --arg n "$NAME" '{
-    name:$n,
+  fw_id=$(find_or_create firewalls "$(jq -n --arg n "$NAME" --arg ssh "$ssh_from" \
+    '{name:$n,rules:[{direction:"in",protocol:"tcp",port:"22",source_ips:[$ssh],description:"ssh"}]}')")
+
+  # find_or_create will not touch an existing firewall's rules, so set them
+  # explicitly — otherwise a firewall from an earlier run keeps its old, wider rules.
+  api POST "/firewalls/$fw_id/actions/set_rules" "$(jq -n --arg ssh "$ssh_from" '{
     rules:[
-      {direction:"in",protocol:"tcp",port:"22",source_ips:["0.0.0.0/0","::/0"],description:"ssh"},
-      {direction:"in",protocol:"tcp",port:"3381-3383",source_ips:["0.0.0.0/0","::/0"],description:"snapchain tcp"},
-      {direction:"in",protocol:"udp",port:"3381-3383",source_ips:["0.0.0.0/0","::/0"],description:"snapchain udp"},
+      {direction:"in",protocol:"tcp",port:"22",source_ips:[$ssh],description:"ssh"},
+      {direction:"in",protocol:"udp",port:"3382",source_ips:["0.0.0.0/0","::/0"],description:"snapchain gossip"},
+      {direction:"in",protocol:"tcp",port:"3383",source_ips:["0.0.0.0/0","::/0"],description:"snapchain peer sync"},
       {direction:"in",protocol:"icmp",source_ips:["0.0.0.0/0","::/0"],description:"ping"}
-    ]}')")
+    ]}')" >/dev/null || die "could not set firewall rules"
 
   info "server ($SERVER_TYPE, $LOCATION)"
   local server_id
@@ -305,6 +330,14 @@ cmd_node_status() {
   node_ssh "
     printf '  %-12s %s\n' 'data' \"\$(du -sh /mnt/snapchain/snapchain 2>/dev/null | cut -f1)\"
     printf '  %-12s %s\n' 'disk' \"\$(df -h /mnt/snapchain | tail -1 | awk '{print \$3\" used, \"\$4\" free (\"\$5\")\"}')\"
+    # Running out of disk mid-restore leaves a broken node and wastes hours, so
+    # say something well before it happens. The volume can be grown without
+    # destroying anything: resize it in the cloud console, then resize2fs.
+    used_pct=\$(df --output=pcent /mnt/snapchain | tail -1 | tr -dc '0-9')
+    if [ \"\${used_pct:-0}\" -ge 80 ]; then
+      printf '  %-12s %s\n' 'WARNING' \"volume is \${used_pct}%% full — grow it before it fills\"
+      printf '  %-12s %s\n' '' 'hcloud volume resize, then: resize2fs /dev/sdb'
+    fi
     printf '  %-12s %s\n' 'containers' \"\$(docker ps --format '{{.Names}}' | tr '\n' ' ')\"
     info=\$(curl -s --max-time 5 http://localhost:3381/v1/info 2>/dev/null || true)
     if [ -n \"\$info\" ]; then
@@ -347,13 +380,42 @@ cmd_destroy() {
   echo "This deletes the server and the volume. Snapshot data will be lost."
   read -rp "Type the server name ($NAME) to confirm: " confirm
   [ "$confirm" = "$NAME" ] || die "aborted."
-  local sid vid
+  local sid vid failed=0
   sid=$(jq -r .server_id "$STATE_FILE"); vid=$(jq -r .volume_id "$STATE_FILE")
-  api DELETE "/servers/$sid" >/dev/null && info "server deleted"
-  sleep 3
-  api DELETE "/volumes/$vid" >/dev/null && info "volume deleted"
+
+  api DELETE "/servers/$sid" >/dev/null || failed=1
+  # A volume cannot be deleted while it is still attached, and detaching is not
+  # instant after the server goes away.
+  local detached=0
+  for _ in $(seq 1 30); do
+    if [ -z "$(api GET "/volumes/$vid" 2>/dev/null | jq -r '.volume.server // empty')" ]; then
+      detached=1; break
+    fi
+    sleep 2
+  done
+  [ "$detached" = 1 ] || info "volume still attached after 60s; deleting anyway"
+  api DELETE "/volumes/$vid" >/dev/null || failed=1
+
+  # Confirm they are actually gone rather than trusting the delete calls. A 404
+  # here is the success case.
+  local server_gone=0 volume_gone=0
+  api GET "/servers/$sid" >/dev/null 2>&1 || server_gone=1
+  api GET "/volumes/$vid" >/dev/null 2>&1 || volume_gone=1
+
+  if [ "$server_gone" = 1 ]; then info "server deleted"; else info "SERVER STILL EXISTS (id $sid)"; failed=1; fi
+  if [ "$volume_gone" = 1 ]; then info "volume deleted"; else info "VOLUME STILL EXISTS (id $vid)"; failed=1; fi
+
+  if [ "$failed" = 1 ]; then
+    # Keep local state. Deleting it would orphan paid resources with no record of
+    # what to clean up — the worst possible outcome of a teardown command.
+    echo
+    echo "Teardown did NOT fully succeed. $STATE_FILE has been kept so you can retry." >&2
+    echo "Check https://console.hetzner.cloud/ and confirm nothing is still billing." >&2
+    exit 1
+  fi
+
   rm -f "$STATE_FILE"
-  info "done. Remember to delete the Hetzner API token too — nothing needs it now."
+  info "done. The API token is no longer needed — delete it in the Hetzner console."
 }
 
 case "${1:-}" in
