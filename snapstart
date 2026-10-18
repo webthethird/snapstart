@@ -154,6 +154,34 @@ provision_aws() {
 
   info "region $AWS_REGION"
 
+  # Pre-flight the vCPU quota before creating anything.
+  #
+  # New AWS accounts ship with a low on-demand vCPU limit — as little as 5 — and
+  # m5.xlarge is 4 vCPUs. Discovering that after the security group and key pair
+  # exist means a confusing VcpuLimitExceeded halfway through. This is the same
+  # class of failure as Hetzner's volume cap, so check it the same way: early,
+  # and with an explanation rather than a raw API error.
+  local vcpu_quota vcpus_needed=4
+  vcpu_quota=$(aws service-quotas get-service-quota --region "$AWS_REGION" \
+    --service-code ec2 --quota-code L-1216C47A \
+    --query 'Quota.Value' --output text 2>/dev/null || echo "")
+  if [ -n "$vcpu_quota" ] && [ "$vcpu_quota" != "None" ]; then
+    local quota_int; quota_int=${vcpu_quota%.*}
+    info "on-demand vCPU quota: $quota_int (need $vcpus_needed)"
+    if [ "$quota_int" -lt "$vcpus_needed" ] 2>/dev/null; then
+      die "Your AWS account's on-demand vCPU quota is $quota_int, but $AWS_INSTANCE_TYPE needs $vcpus_needed.
+
+New accounts are often capped low. Request an increase for 'Running On-Demand
+Standard instances' in the Service Quotas console, or pick a smaller instance:
+
+    SNAPSTART_AWS_INSTANCE_TYPE=m5.large ./snapstart provision
+
+Nothing has been created, and you have not been billed."
+    fi
+  else
+    info "on-demand vCPU quota: could not read (continuing)"
+  fi
+
   # Import our own public key rather than letting AWS generate one — that way the
   # private half never exists anywhere but this machine.
   if ! aws_ec2 describe-key-pairs --key-names "$NAME" >/dev/null 2>&1; then
