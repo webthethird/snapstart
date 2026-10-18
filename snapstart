@@ -224,6 +224,102 @@ cmd_status() {
   printf "  %-12s EUR %.2f\n" "per day" "$(echo "$shr $vol_hr" | awk '{print ($1+$2)*24}')"
 }
 
+node_ssh() {
+  [ -f "$STATE_FILE" ] || die "nothing provisioned yet. Run ./snapstart provision"
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "root@$(jq -r .ip "$STATE_FILE")" "$@"
+}
+
+cmd_node_up() {
+  need jq; need ssh
+  [ -f "$STATE_FILE" ] || die "nothing provisioned yet. Run ./snapstart provision"
+  if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
+  # Only used to label the node's metrics as yours. It is not an authorization of
+  # any kind and the node works fine with 0.
+  local operator_fid="${TEST_FID:-0}"
+
+  # Running this against a node that is already up is not harmless: `snapchain.sh
+  # upgrade` runs `docker compose up`, which RECREATES the container, and a restart
+  # mid-restore throws away snapshot progress and starts over from chunk 0. Observed
+  # the hard way — it cost ~15 minutes and looked like a shard rollover in the logs.
+  if [ "${1:-}" != "--force" ] && node_ssh "docker ps --format '{{.Names}}' | grep -q snapchain" 2>/dev/null; then
+    info "node is already running; leaving it alone"
+    info "(use ./snapstart node up --force to recreate it, which restarts any restore in progress)"
+    echo
+    cmd_node_status
+    return 0
+  fi
+
+  info "installing snapchain (operator fid $operator_fid)"
+  node_ssh "
+    set -e
+    # Snapshot data goes on the volume. The root disk is 150 GB and the snapshot
+    # alone is larger than that, so this symlink is load-bearing.
+    mkdir -p /mnt/snapchain/snapchain
+    ln -sfn /mnt/snapchain/snapchain /root/snapchain
+    cd /root/snapchain
+
+    curl -sSL -o snapchain.sh \
+      https://raw.githubusercontent.com/farcasterxyz/snapchain/refs/heads/main/scripts/snapchain.sh
+    chmod +x snapchain.sh
+
+    # Upstream's bootstrap prompts for an operator FID and a rewards acknowledgement
+    # on a TTY. It only prompts for keys that are MISSING from .env, so writing them
+    # up front makes the whole thing non-interactive — which is what lets this be
+    # one command instead of an interactive session.
+    #
+    # read_node is snapchain's default: validators are permissioned behind a key in
+    # the SnapchainConfigRegistry on Ethereum mainnet, so a read node is simply what
+    # you get. No RPC URL, no API key, nothing to sign up for.
+    if [ ! -f .env ]; then
+      cat > .env <<ENVEOF
+FC_NETWORK_ID=1
+STATSD_METRICS_SERVER=statsd:8125
+HUB_OPERATOR_FID=$operator_fid
+AGREE_NO_REWARDS_FOR_ME=true
+SKIP_CRONTAB=1
+ENVEOF
+    fi
+
+    # The upgrade script does not reliably exit once containers are healthy, so bound
+    # it and judge success by what is actually running rather than by its exit code.
+    timeout 900 ./snapchain.sh upgrade >/tmp/snapchain-upgrade.log 2>&1 || true
+    docker ps --format '{{.Names}}' | grep -q snapchain || {
+      echo 'snapchain container did not start; see /tmp/snapchain-upgrade.log'
+      tail -20 /tmp/snapchain-upgrade.log
+      exit 1
+    }
+  " || die "node failed to start"
+
+  info "node started; restoring from snapshot"
+  echo
+  cmd_node_status
+  echo
+  info "the restore takes a while. Watch it with: ./snapstart node status"
+}
+
+cmd_node_status() {
+  need jq
+  [ -f "$STATE_FILE" ] || die "nothing provisioned yet."
+  node_ssh "
+    printf '  %-12s %s\n' 'data' \"\$(du -sh /mnt/snapchain/snapchain 2>/dev/null | cut -f1)\"
+    printf '  %-12s %s\n' 'disk' \"\$(df -h /mnt/snapchain | tail -1 | awk '{print \$3\" used, \"\$4\" free (\"\$5\")\"}')\"
+    printf '  %-12s %s\n' 'containers' \"\$(docker ps --format '{{.Names}}' | tr '\n' ' ')\"
+    info=\$(curl -s --max-time 5 http://localhost:3381/v1/info 2>/dev/null || true)
+    if [ -n \"\$info\" ]; then
+      echo \"\$info\" | jq -r '\"  serving      yes\n  block height \" + (.dbStats.numMessages|tostring)' 2>/dev/null \
+        || printf '  %-12s %s\n' 'serving' 'yes'
+    else
+      printf '  %-12s %s\n' 'serving' 'not yet (snapshot still restoring)'
+      last=\$(docker logs --tail 40 snapchain-snapchain-1 2>&1 | grep -o 'chunk_[0-9]*' | tail -1)
+      [ -n \"\$last\" ] && printf '  %-12s %s\n' 'restoring' \"\$last\"
+    fi
+  "
+}
+
+cmd_node_logs() { node_ssh "docker logs --tail \${1:-40} -f snapchain-snapchain-1 2>&1"; }
+
 cmd_ssh() {
   need jq
   [ -f "$STATE_FILE" ] || die "nothing provisioned yet."
@@ -248,6 +344,14 @@ cmd_destroy() {
 
 case "${1:-}" in
   provision) shift; cmd_provision "$@" ;;
+  node)
+    shift
+    case "${1:-}" in
+      up)     shift; cmd_node_up "$@" ;;
+      status) shift; cmd_node_status "$@" ;;
+      logs)   shift; cmd_node_logs "$@" ;;
+      *) die "usage: ./snapstart node {up|status|logs}" ;;
+    esac ;;
   status)    shift; cmd_status "$@" ;;
   ssh)       shift; cmd_ssh "$@" ;;
   destroy)   shift; cmd_destroy "$@" ;;
