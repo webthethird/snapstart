@@ -11,3 +11,7 @@
 node_modules/
 dist/
 .DS_Store
+
+# Investigation artifacts for upstream reports. These belong in the issue
+# itself, not in a tutorial repo.
+evidence/
