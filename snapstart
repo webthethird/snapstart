@@ -7,11 +7,15 @@
 #   ./snapstart client create(2) issue an app key and launch the client
 #
 #   ./snapstart status       what exists right now, and what it costs
+#   ./snapstart tunnel       forward the node's API to localhost:3381
 #   ./snapstart ssh          shell into the node
 #   ./snapstart destroy      delete everything this created
 #
-# The only credential any of this needs is a Hetzner API token, used solely to
-# create the server. The node itself runs with no API keys from anyone.
+# Defaults to AWS. Hetzner is ~a third the price but its new-account volume cap
+# is too small to complete a restore: SNAPSTART_PROVIDER=hetzner once raised.
+#
+# The only credential any of this needs is a cloud API key, used solely to create
+# the server. The node itself runs with no API keys from anyone.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -23,14 +27,47 @@ API="https://api.hetzner.cloud/v1"
 # Resource names. Reused on re-runs, which is what makes this idempotent.
 NAME="snapstart-node"
 
-# Chosen deliberately; see docs for the reasoning.
+# AWS is the default because it is the only provider we have verified can
+# actually complete a restore on a brand-new account.
+#
+# Restoring is a three-stage pipeline per shard — download gzipped chunks,
+# concatenate them into one tar, unpack that tar into RocksDB — and upstream
+# deletes the staging directory only after ALL shards finish
+# (src/storage/db/snapshot.rs). So every shard's chunks and tar sit on disk for
+# the whole restore. Measured peak: ~1,580 GB, against a final database near
+# 550 GB.
+#
+# Hetzner Cloud caps new accounts at 1024 GB of volume storage (verified: a
+# resize to 1030 GB returns resource_limit_exceeded), which is not enough.
+# Hetzner remains supported and is roughly a third the price — but only if your
+# account's quota has been raised. See README.
+PROVIDER="${SNAPSTART_PROVIDER:-aws}"
+
+# --- AWS -------------------------------------------------------------------
+#   m5.xlarge   4 vCPU / 16 GB — the instance the Snapchain docs specify
+#   2048 GB     root volume. AWS lets the root disk be any size, so unlike
+#               Hetzner there is no second volume to attach, format or mount.
+AWS_INSTANCE_TYPE="${SNAPSTART_AWS_INSTANCE_TYPE:-m5.xlarge}"
+AWS_REGION="${SNAPSTART_AWS_REGION:-us-east-1}"
+AWS_DISK_GB="${SNAPSTART_DISK_GB:-2048}"
+
+# --- Hetzner ---------------------------------------------------------------
 #   cx43     8 vCPU / 16 GB — exceeds snapchain's documented 4 vCPU / 16 GB
 #   fsn1     Falkenstein; a syncing node does not care about your latency
-#   1024 GB  volume, GROWN not guessed — Hetzner volumes can expand, never shrink
 SERVER_TYPE="${SNAPSTART_SERVER_TYPE:-cx43}"
 LOCATION="${SNAPSTART_LOCATION:-fsn1}"
 VOLUME_GB="${SNAPSTART_VOLUME_GB:-1024}"
 IMAGE="ubuntu-24.04"
+
+# Installed by cloud-init on first boot. Four lines of YAML is the whole
+# difference between a bare Ubuntu box and one that can run snapchain.
+CLOUD_INIT='#cloud-config
+package_update: true
+packages: [curl, ca-certificates, jq]
+runcmd:
+  - [ sh, -c, "curl -fsSL https://get.docker.com | sh" ]
+  - [ sh, -c, "usermod -aG docker ubuntu 2>/dev/null || true" ]
+'
 
 die() { echo "error: $*" >&2; exit 1; }
 info() { echo "  $*"; }
@@ -87,16 +124,145 @@ find_or_create() {
   echo "$out" | jq -r ".${kind%s}.id"
 }
 
-cmd_provision() {
-  need curl; need jq; need ssh-keygen
-  load_token
+# A keypair dedicated to this node, rather than your personal one. Same instinct
+# as using a fresh wallet for a risky contract interaction.
+ensure_ssh_key() {
   mkdir -p "$STATE_DIR"
-
   if [ ! -f "$SSH_KEY" ]; then
     info "generating a dedicated SSH keypair (not reusing your personal one)"
     ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "$NAME" -q
     chmod 600 "$SSH_KEY"
   fi
+}
+
+cmd_provision() {
+  case "$PROVIDER" in
+    aws)     provision_aws "$@" ;;
+    hetzner) provision_hetzner "$@" ;;
+    *) die "unknown SNAPSTART_PROVIDER '$PROVIDER' (expected aws or hetzner)" ;;
+  esac
+}
+
+aws_ec2() { aws ec2 --region "$AWS_REGION" --output json "$@"; }
+
+provision_aws() {
+  need aws; need jq; need ssh-keygen
+  ensure_ssh_key
+
+  aws sts get-caller-identity >/dev/null 2>&1 \
+    || die "AWS credentials are not configured. Run: aws configure"
+
+  info "region $AWS_REGION"
+
+  # Import our own public key rather than letting AWS generate one — that way the
+  # private half never exists anywhere but this machine.
+  if ! aws_ec2 describe-key-pairs --key-names "$NAME" >/dev/null 2>&1; then
+    info "ssh key"
+    aws_ec2 import-key-pair --key-name "$NAME" \
+      --public-key-material "fileb://$SSH_KEY.pub" >/dev/null
+  else
+    info "ssh key (exists)"
+  fi
+
+  # Only what peers actually need: 3382/udp for gossip and 3383/tcp for sync.
+  # 3381 is the client-facing HTTP API and stays closed — reach it via
+  # ./snapstart tunnel rather than exposing an unauthenticated RPC endpoint.
+  local sg_id
+  sg_id=$(aws_ec2 describe-security-groups --group-names "$NAME" \
+            --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || true)
+  if [ -z "$sg_id" ] || [ "$sg_id" = "None" ]; then
+    info "security group (22/tcp, 3382/udp, 3383/tcp)"
+    sg_id=$(aws_ec2 create-security-group --group-name "$NAME" \
+      --description "snapstart snapchain read node" \
+      --query 'GroupId' --output text)
+    local ssh_from="${SNAPSTART_SSH_FROM:-0.0.0.0/0}"
+    aws_ec2 authorize-security-group-ingress --group-id "$sg_id" \
+      --ip-permissions \
+        "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=$ssh_from}]" \
+        "IpProtocol=udp,FromPort=3382,ToPort=3382,IpRanges=[{CidrIp=0.0.0.0/0}]" \
+        "IpProtocol=tcp,FromPort=3383,ToPort=3383,IpRanges=[{CidrIp=0.0.0.0/0}]" \
+      >/dev/null
+  else
+    info "security group (exists)"
+  fi
+
+  # Canonical's account ID. Resolving the AMI by name beats hardcoding an ID that
+  # differs per region and goes stale with every image rebuild.
+  local ami
+  ami=$(aws_ec2 describe-images --owners 099720109477 \
+    --filters "Name=name,Values=ubuntu/images/hvm-ssd*/ubuntu-noble-24.04-amd64-server-*" \
+              "Name=state,Values=available" \
+    --query 'sort_by(Images,&CreationDate)[-1].ImageId' --output text)
+  [ -n "$ami" ] && [ "$ami" != "None" ] || die "could not resolve an Ubuntu 24.04 AMI in $AWS_REGION"
+  info "ami $ami"
+
+  local instance_id
+  instance_id=$(aws_ec2 describe-instances \
+    --filters "Name=tag:Name,Values=$NAME" "Name=instance-state-name,Values=pending,running" \
+    --query 'Reservations[0].Instances[0].InstanceId' --output text 2>/dev/null || true)
+
+  if [ -z "$instance_id" ] || [ "$instance_id" = "None" ]; then
+    info "instance ($AWS_INSTANCE_TYPE, ${AWS_DISK_GB} GB root)"
+    # The root volume carries everything. No separate EBS volume means nothing to
+    # attach, format, mount, or forget to mount — the single biggest simplification
+    # over the Hetzner path.
+    instance_id=$(aws_ec2 run-instances \
+      --image-id "$ami" \
+      --instance-type "$AWS_INSTANCE_TYPE" \
+      --key-name "$NAME" \
+      --security-group-ids "$sg_id" \
+      --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":$AWS_DISK_GB,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
+      --user-data "$CLOUD_INIT" \
+      --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME}]" \
+      --query 'Instances[0].InstanceId' --output text)
+  else
+    info "instance (exists)"
+  fi
+
+  info "waiting for the instance to run"
+  aws_ec2 wait instance-running --instance-ids "$instance_id"
+
+  local ip
+  ip=$(aws_ec2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+  [ -n "$ip" ] && [ "$ip" != "None" ] || die "instance has no public IP"
+  info "ip $ip"
+
+  jq -n --arg provider aws --arg iid "$instance_id" --arg ip "$ip" \
+     --arg region "$AWS_REGION" --arg type "$AWS_INSTANCE_TYPE" --argjson gb "$AWS_DISK_GB" \
+     '{provider:$provider,instance_id:$iid,ip:$ip,region:$region,server_type:$type,disk_gb:$gb}' \
+     > "$STATE_FILE"
+
+  info "waiting for ssh"
+  local ready=""
+  for _ in $(seq 1 90); do
+    if ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 \
+         -o BatchMode=yes "ubuntu@$ip" true 2>/dev/null; then ready=1; break; fi
+    sleep 5
+  done
+  [ -n "$ready" ] || die "ssh never came up on $ip"
+
+  info "waiting for docker (cloud-init)"
+  for _ in $(seq 1 90); do
+    node_ssh "cloud-init status 2>/dev/null | grep -q done" 2>/dev/null && break
+    sleep 5
+  done
+
+  # Snapchain's data lives here on every provider, so node up stays identical.
+  node_ssh "sudo mkdir -p /mnt/snapchain && sudo chown \$(id -u):\$(id -g) /mnt/snapchain" \
+    || die "could not prepare /mnt/snapchain"
+
+  echo
+  info "provisioned. details in $STATE_FILE"
+  cmd_status
+  echo
+  info "next: ./snapstart node up"
+}
+
+provision_hetzner() {
+  need curl; need jq; need ssh-keygen
+  load_token
+  ensure_ssh_key
 
   info "ssh key"
   local key_id
@@ -228,10 +394,10 @@ The server has been created and IS BILLING. Remove it with:
     sleep 5
   done
 
-  jq -n --argjson sid "$server_id" --argjson vid "$vol_id" --arg ip "$ip" \
+  jq -n --arg provider hetzner --argjson sid "$server_id" --argjson vid "$vol_id" --arg ip "$ip" \
      --arg dev "$mount" --arg type "$SERVER_TYPE" --arg loc "$LOCATION" \
      --argjson gb "$VOLUME_GB" \
-     '{server_id:$sid,volume_id:$vid,ip:$ip,device:$dev,server_type:$type,location:$loc,volume_gb:$gb}' \
+     '{provider:$provider,server_id:$sid,volume_id:$vid,ip:$ip,device:$dev,server_type:$type,location:$loc,volume_gb:$gb}' \
      > "$STATE_FILE"
 
   echo
@@ -242,8 +408,42 @@ The server has been created and IS BILLING. Remove it with:
 }
 
 cmd_status() {
-  need jq; load_token
+  need jq
   [ -f "$STATE_FILE" ] || die "nothing provisioned yet. Run ./snapstart provision"
+  case "$(jq -r '.provider // "hetzner"' "$STATE_FILE")" in
+    aws) status_aws ;;
+    *)   status_hetzner ;;
+  esac
+}
+
+status_aws() {
+  need aws
+  local iid ip region type gb state
+  iid=$(jq -r .instance_id "$STATE_FILE"); ip=$(jq -r .ip "$STATE_FILE")
+  region=$(jq -r .region "$STATE_FILE"); type=$(jq -r .server_type "$STATE_FILE")
+  gb=$(jq -r .disk_gb "$STATE_FILE")
+  state=$(aws ec2 --region "$region" describe-instances --instance-ids "$iid" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo unknown)
+
+  echo
+  printf "  %-12s %s\n" "provider" "aws ($region)"
+  printf "  %-12s %s\n" "status" "$state"
+  printf "  %-12s %s\n" "ip" "$ip"
+  printf "  %-12s %s\n" "type" "$type"
+  printf "  %-12s %s GB gp3 root\n" "disk" "$gb"
+  # On-demand us-east-1 list rates. AWS's pricing API needs a separate endpoint
+  # and its own permissions, so these are stated rather than queried — check the
+  # console for your own account's actual rate.
+  local inst_hr="0.192" disk_hr
+  disk_hr=$(awk -v gb="$gb" 'BEGIN{printf "%.4f", gb*0.08/730}')
+  printf "  %-12s USD %.4f/hr  (instance ~%s + disk %.4f)\n" "cost" \
+    "$(awk -v a="$inst_hr" -v b="$disk_hr" 'BEGIN{print a+b}')" "$inst_hr" "$disk_hr"
+  printf "  %-12s USD %.2f\n" "per day" \
+    "$(awk -v a="$inst_hr" -v b="$disk_hr" 'BEGIN{print (a+b)*24}')"
+}
+
+status_hetzner() {
+  need jq; load_token
   local sid vid ip
   sid=$(jq -r .server_id "$STATE_FILE"); vid=$(jq -r .volume_id "$STATE_FILE")
   ip=$(jq -r .ip "$STATE_FILE")
@@ -268,10 +468,21 @@ cmd_status() {
   printf "  %-12s EUR %.2f\n" "per day" "$(echo "$shr $vol_hr" | awk '{print ($1+$2)*24}')"
 }
 
+# AWS's Ubuntu images ship with an unprivileged `ubuntu` user and no root login;
+# Hetzner's let you in as root. Read it back from state so every other command
+# stays provider-agnostic.
+node_user() {
+  [ -f "$STATE_FILE" ] || { echo root; return; }
+  case "$(jq -r '.provider // "hetzner"' "$STATE_FILE")" in
+    aws) echo ubuntu ;;
+    *)   echo root ;;
+  esac
+}
+
 node_ssh() {
   [ -f "$STATE_FILE" ] || die "nothing provisioned yet. Run ./snapstart provision"
   ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "root@$(jq -r .ip "$STATE_FILE")" "$@"
+    "$(node_user)@$(jq -r .ip "$STATE_FILE")" "$@"
 }
 
 cmd_node_up() {
@@ -301,8 +512,8 @@ cmd_node_up() {
     # Snapshot data goes on the volume. The root disk is 150 GB and the snapshot
     # alone is larger than that, so this symlink is load-bearing.
     mkdir -p /mnt/snapchain/snapchain
-    ln -sfn /mnt/snapchain/snapchain /root/snapchain
-    cd /root/snapchain
+    ln -sfn /mnt/snapchain/snapchain \$HOME/snapchain
+    cd \$HOME/snapchain
 
     curl -sSL -o snapchain.sh \
       https://raw.githubusercontent.com/farcasterxyz/snapchain/refs/heads/main/scripts/snapchain.sh
@@ -383,7 +594,7 @@ cmd_tunnel() {
   local ip; ip=$(jq -r .ip "$STATE_FILE")
   info "forwarding localhost:3381 -> $ip:3381 (ctrl-c to stop)"
   exec ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -N \
-    -L 3381:localhost:3381 "root@$ip"
+    -L 3381:localhost:3381 "$(node_user)@$ip"
 }
 
 # Grow the data volume without destroying anything.
@@ -395,10 +606,15 @@ cmd_tunnel() {
 # Hetzner volumes can only ever grow, never shrink. Resizing the volume is online
 # and safe; resize2fs then extends the filesystem over the new space, also online.
 cmd_volume_grow() {
-  need jq; load_token
+  need jq
   local new_gb="${1:-}"
   [ -n "$new_gb" ] || die "usage: ./snapstart volume grow <GB>"
   [ -f "$STATE_FILE" ] || die "nothing provisioned yet."
+  [ "$(jq -r '.provider // "hetzner"' "$STATE_FILE")" = "hetzner" ] \
+    || die "volume grow is Hetzner-only. On AWS the root volume is sized at
+provision time — set SNAPSTART_DISK_GB and reprovision, or modify the volume in
+the EC2 console and run: sudo growpart /dev/nvme0n1 1 && sudo resize2fs /dev/nvme0n1p1"
+  load_token
 
   local vid current
   vid=$(jq -r .volume_id "$STATE_FILE")
@@ -433,15 +649,51 @@ cmd_ssh() {
   need jq
   [ -f "$STATE_FILE" ] || die "nothing provisioned yet."
   exec ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
-    "root@$(jq -r .ip "$STATE_FILE")" "$@"
+    "$(node_user)@$(jq -r .ip "$STATE_FILE")" "$@"
 }
 
 cmd_destroy() {
-  need jq; load_token
+  need jq
   [ -f "$STATE_FILE" ] || die "nothing to destroy."
-  echo "This deletes the server and the volume. Snapshot data will be lost."
+  echo "This deletes the server and its disk. The restored database will be lost."
   read -rp "Type the server name ($NAME) to confirm: " confirm
   [ "$confirm" = "$NAME" ] || die "aborted."
+  case "$(jq -r '.provider // "hetzner"' "$STATE_FILE")" in
+    aws) destroy_aws ;;
+    *)   destroy_hetzner ;;
+  esac
+}
+
+destroy_aws() {
+  need aws
+  local iid region
+  iid=$(jq -r .instance_id "$STATE_FILE"); region=$(jq -r .region "$STATE_FILE")
+
+  aws ec2 --region "$region" terminate-instances --instance-ids "$iid" >/dev/null \
+    || die "terminate failed; $STATE_FILE kept so you can retry. Check the EC2 console."
+
+  info "waiting for termination"
+  aws ec2 --region "$region" wait instance-terminated --instance-ids "$iid" 2>/dev/null || true
+
+  # Verify rather than trust. The root volume has DeleteOnTermination=true, so it
+  # goes with the instance — but confirm the instance really is gone before we
+  # throw away the only record of what to clean up.
+  local state
+  state=$(aws ec2 --region "$region" describe-instances --instance-ids "$iid" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo gone)
+  if [ "$state" != "terminated" ] && [ "$state" != "gone" ]; then
+    echo "Instance is '$state', not terminated. $STATE_FILE kept." >&2
+    echo "Check https://console.aws.amazon.com/ec2/ and confirm nothing is still billing." >&2
+    exit 1
+  fi
+  info "instance terminated (root volume deleted with it)"
+
+  rm -f "$STATE_FILE"
+  info "done. The AWS credentials are no longer needed for this node."
+}
+
+destroy_hetzner() {
+  load_token
   local sid vid failed=0
   sid=$(jq -r .server_id "$STATE_FILE"); vid=$(jq -r .volume_id "$STATE_FILE")
 
