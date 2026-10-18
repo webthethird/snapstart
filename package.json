@@ -1,0 +1,24 @@
+{
+  "name": "snapstart",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "new-account": "tsx --env-file-if-exists=.env scripts/new-test-account.ts",
+    "price": "tsx --env-file-if-exists=.env scripts/price.ts",
+    "register": "tsx --env-file-if-exists=.env scripts/register-fid.ts"
+  },
+  "dependencies": {
+    "@farcaster/core": "^0.20.0",
+    "viem": "^2.48.11"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}

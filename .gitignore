@@ -1,0 +1,13 @@
+# Secrets — a seed phrase must never reach git history.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Provisioning state: SSH keypair, server IDs, measured output.
+.state/
+
+node_modules/
+dist/
+.DS_Store

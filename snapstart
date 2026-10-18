@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+#
+# snapstart — run a Farcaster read node and a client that talks to it.
+#
+#   ./snapstart provision    (0) furnish the compute
+#   ./snapstart node up      (1) start a Snapchain read node
+#   ./snapstart client create(2) issue an app key and launch the client
+#
+#   ./snapstart status       what exists right now, and what it costs
+#   ./snapstart ssh          shell into the node
+#   ./snapstart destroy      delete everything this created
+#
+# The only credential any of this needs is a Hetzner API token, used solely to
+# create the server. The node itself runs with no API keys from anyone.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+STATE_DIR=".state"
+STATE_FILE="$STATE_DIR/node.json"
+SSH_KEY="$STATE_DIR/id_snapstart"
+API="https://api.hetzner.cloud/v1"
+
+# Resource names. Reused on re-runs, which is what makes this idempotent.
+NAME="snapstart-node"
+
+# Chosen deliberately; see docs for the reasoning.
+#   cx43     8 vCPU / 16 GB — exceeds snapchain's documented 4 vCPU / 16 GB
+#   fsn1     Falkenstein; a syncing node does not care about your latency
+#   1024 GB  volume, GROWN not guessed — Hetzner volumes can expand, never shrink
+SERVER_TYPE="${SNAPSTART_SERVER_TYPE:-cx43}"
+LOCATION="${SNAPSTART_LOCATION:-fsn1}"
+VOLUME_GB="${SNAPSTART_VOLUME_GB:-1024}"
+IMAGE="ubuntu-24.04"
+
+die() { echo "error: $*" >&2; exit 1; }
+info() { echo "  $*"; }
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "$1 is required but not installed."
+}
+
+load_token() {
+  if [ -f .env ]; then set -a; . ./.env; set +a; fi
+  [ -n "${HETZNER_TOKEN:-}" ] || die "No HETZNER_TOKEN. Put it in .env — see .env.example."
+}
+
+api() {
+  local method="$1" path="$2" body="${3:-}"
+  if [ -n "$body" ]; then
+    curl -sS -X "$method" -H "Authorization: Bearer $HETZNER_TOKEN" \
+      -H "Content-Type: application/json" -d "$body" "$API$path"
+  else
+    curl -sS -X "$method" -H "Authorization: Bearer $HETZNER_TOKEN" "$API$path"
+  fi
+}
+
+# Hetzner returns {"error": {...}} on failure with a 2xx-looking body in places,
+# so check explicitly rather than trusting the exit code.
+check() {
+  local json="$1" what="$2"
+  if echo "$json" | jq -e '.error' >/dev/null 2>&1; then
+    die "$what failed: $(echo "$json" | jq -r '.error.message')"
+  fi
+}
+
+# Find a resource by name, or create it. Returns its id on stdout.
+find_or_create() {
+  local kind="$1" create_body="$2" existing
+  existing=$(api GET "/$kind?name=$NAME" | jq -r ".${kind}[0].id // empty")
+  if [ -n "$existing" ]; then
+    echo "$existing"; return
+  fi
+  local out
+  out=$(api POST "/$kind" "$create_body")
+  check "$out" "creating $kind"
+  echo "$out" | jq -r ".${kind%s}.id"
+}
+
+cmd_provision() {
+  need curl; need jq; need ssh-keygen
+  load_token
+  mkdir -p "$STATE_DIR"
+
+  if [ ! -f "$SSH_KEY" ]; then
+    info "generating a dedicated SSH keypair (not reusing your personal one)"
+    ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "$NAME" -q
+    chmod 600 "$SSH_KEY"
+  fi
+
+  info "ssh key"
+  local key_id
+  key_id=$(find_or_create ssh_keys \
+    "$(jq -n --arg n "$NAME" --arg k "$(cat "$SSH_KEY.pub")" '{name:$n,public_key:$k}')")
+
+  # 3381-3383 on BOTH tcp and udp: snapchain gossips over QUIC as well as TCP,
+  # and a node with only TCP open will appear to start fine and then never sync.
+  info "firewall (22/tcp, 3381-3383 tcp+udp)"
+  local fw_id
+  fw_id=$(find_or_create firewalls "$(jq -n --arg n "$NAME" '{
+    name:$n,
+    rules:[
+      {direction:"in",protocol:"tcp",port:"22",source_ips:["0.0.0.0/0","::/0"],description:"ssh"},
+      {direction:"in",protocol:"tcp",port:"3381-3383",source_ips:["0.0.0.0/0","::/0"],description:"snapchain tcp"},
+      {direction:"in",protocol:"udp",port:"3381-3383",source_ips:["0.0.0.0/0","::/0"],description:"snapchain udp"},
+      {direction:"in",protocol:"icmp",source_ips:["0.0.0.0/0","::/0"],description:"ping"}
+    ]}')")
+
+  info "server ($SERVER_TYPE, $LOCATION)"
+  local server_id
+  server_id=$(find_or_create servers "$(jq -n \
+    --arg n "$NAME" --arg t "$SERVER_TYPE" --arg l "$LOCATION" --arg i "$IMAGE" \
+    --argjson k "$key_id" --argjson f "$fw_id" \
+    --arg ud '#cloud-config
+package_update: true
+packages: [curl, ca-certificates, jq]
+runcmd:
+  - [ sh, -c, "curl -fsSL https://get.docker.com | sh" ]
+' '{
+      name:$n, server_type:$t, location:$l, image:$i,
+      ssh_keys:[$k], firewalls:[{firewall:$f}],
+      public_net:{enable_ipv4:true,enable_ipv6:true},
+      user_data:$ud
+    }')")
+
+  # Wait for an IP before attaching storage.
+  local ip=""
+  for _ in $(seq 1 60); do
+    ip=$(api GET "/servers/$server_id" | jq -r '.server.public_net.ipv4.ip // empty')
+    [ -n "$ip" ] && break
+    sleep 2
+  done
+  [ -n "$ip" ] || die "server never got an IPv4 address"
+  info "ip $ip"
+
+  info "volume (${VOLUME_GB} GB)"
+  local vol_id existing_vol
+  existing_vol=$(api GET "/volumes?name=$NAME" | jq -r '.volumes[0].id // empty')
+  if [ -n "$existing_vol" ]; then
+    vol_id="$existing_vol"
+  else
+    local out
+    out=$(api POST /volumes "$(jq -n --arg n "$NAME" --argjson s "$VOLUME_GB" --argjson srv "$server_id" \
+      '{name:$n,size:$s,server:$srv,automount:true,format:"ext4"}')")
+    check "$out" "creating volume"
+    vol_id=$(echo "$out" | jq -r '.volume.id')
+  fi
+
+  local mount
+  mount=$(api GET "/volumes/$vol_id" | jq -r '.volume.linux_device // empty')
+
+  jq -n --argjson sid "$server_id" --argjson vid "$vol_id" --arg ip "$ip" \
+     --arg dev "$mount" --arg type "$SERVER_TYPE" --arg loc "$LOCATION" \
+     --argjson gb "$VOLUME_GB" \
+     '{server_id:$sid,volume_id:$vid,ip:$ip,device:$dev,server_type:$type,location:$loc,volume_gb:$gb}' \
+     > "$STATE_FILE"
+
+  echo
+  info "provisioned. details in $STATE_FILE"
+  cmd_status
+  echo
+  info "next: ./snapstart node up"
+}
+
+cmd_status() {
+  need jq; load_token
+  [ -f "$STATE_FILE" ] || die "nothing provisioned yet. Run ./snapstart provision"
+  local sid vid ip
+  sid=$(jq -r .server_id "$STATE_FILE"); vid=$(jq -r .volume_id "$STATE_FILE")
+  ip=$(jq -r .ip "$STATE_FILE")
+
+  local s v shr vhr
+  s=$(api GET "/servers/$sid"); v=$(api GET "/volumes/$vid")
+  shr=$(echo "$s" | jq -r --arg l "$(jq -r .location "$STATE_FILE")" \
+        '.server.server_type.prices[] | select(.location==$l) | .price_hourly.gross')
+  vhr=$(echo "$v" | jq -r '.volume.size' )
+
+  echo
+  printf "  %-12s %s\n" "status" "$(echo "$s" | jq -r '.server.status')"
+  printf "  %-12s %s\n" "ip" "$ip"
+  printf "  %-12s %s\n" "type" "$(echo "$s" | jq -r '.server.server_type.name')"
+  printf "  %-12s %s GB on %s\n" "volume" "$vhr" "$(echo "$v" | jq -r '.volume.linux_device')"
+  # Volume pricing is per-GB-month; /730 for an hourly figure comparable to the server.
+  local vol_hr
+  vol_hr=$(api GET /pricing | jq -r --argjson gb "$vhr" \
+    '(.pricing.volume.price_per_gb_month.gross|tonumber) * $gb / 730')
+  printf "  %-12s EUR %.4f/hr  (server %.4f + volume %.4f)\n" "cost" \
+    "$(echo "$shr $vol_hr" | awk '{print $1+$2}')" "$shr" "$vol_hr"
+  printf "  %-12s EUR %.2f\n" "per day" "$(echo "$shr $vol_hr" | awk '{print ($1+$2)*24}')"
+}
+
+cmd_ssh() {
+  need jq
+  [ -f "$STATE_FILE" ] || die "nothing provisioned yet."
+  exec ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
+    "root@$(jq -r .ip "$STATE_FILE")" "$@"
+}
+
+cmd_destroy() {
+  need jq; load_token
+  [ -f "$STATE_FILE" ] || die "nothing to destroy."
+  echo "This deletes the server and the volume. Snapshot data will be lost."
+  read -rp "Type the server name ($NAME) to confirm: " confirm
+  [ "$confirm" = "$NAME" ] || die "aborted."
+  local sid vid
+  sid=$(jq -r .server_id "$STATE_FILE"); vid=$(jq -r .volume_id "$STATE_FILE")
+  api DELETE "/servers/$sid" >/dev/null && info "server deleted"
+  sleep 3
+  api DELETE "/volumes/$vid" >/dev/null && info "volume deleted"
+  rm -f "$STATE_FILE"
+  info "done. Remember to delete the Hetzner API token too — nothing needs it now."
+}
+
+case "${1:-}" in
+  provision) shift; cmd_provision "$@" ;;
+  status)    shift; cmd_status "$@" ;;
+  ssh)       shift; cmd_ssh "$@" ;;
+  destroy)   shift; cmd_destroy "$@" ;;
+  *) sed -n '3,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+esac
