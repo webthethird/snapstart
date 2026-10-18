@@ -148,6 +148,42 @@ runcmd:
   local mount
   mount=$(api GET "/volumes/$vol_id" | jq -r '.volume.linux_device // empty')
 
+  info "waiting for ssh"
+  local ready=""
+  for _ in $(seq 1 60); do
+    if ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 \
+         -o BatchMode=yes "root@$ip" true 2>/dev/null; then ready=1; break; fi
+    sleep 5
+  done
+  [ -n "$ready" ] || die "ssh never came up on $ip"
+
+  # Hetzner's automount:true is documented to mount the volume for you. It does not
+  # fire when the volume is created against an already-booted server, and fails
+  # silently — the device shows up under /dev/disk/by-id and is simply never
+  # mounted. Do it ourselves rather than trusting it.
+  #
+  # nofail matters: without it, a detached volume makes the server unbootable.
+  info "mounting volume at /mnt/snapchain"
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes "root@$ip" "
+    set -e
+    dev=/dev/disk/by-id/scsi-0HC_Volume_$vol_id
+    for _ in \$(seq 1 30); do [ -e \"\$dev\" ] && break; sleep 2; done
+    [ -e \"\$dev\" ] || { echo 'volume device never appeared'; exit 1; }
+    blkid \"\$dev\" >/dev/null 2>&1 || mkfs.ext4 -F \"\$dev\"
+    mkdir -p /mnt/snapchain
+    grep -q ' /mnt/snapchain ' /etc/fstab || \
+      echo \"\$dev /mnt/snapchain ext4 discard,nofail,defaults 0 0\" >> /etc/fstab
+    mountpoint -q /mnt/snapchain || mount -a
+  " || die "failed to mount volume"
+
+  # Docker arrives via cloud-init; ./snapstart node up needs it present.
+  info "waiting for docker (cloud-init)"
+  for _ in $(seq 1 60); do
+    ssh -i "$SSH_KEY" -o BatchMode=yes "root@$ip" \
+      "cloud-init status 2>/dev/null | grep -q done" 2>/dev/null && break
+    sleep 5
+  done
+
   jq -n --argjson sid "$server_id" --argjson vid "$vol_id" --arg ip "$ip" \
      --arg dev "$mount" --arg type "$SERVER_TYPE" --arg loc "$LOCATION" \
      --argjson gb "$VOLUME_GB" \
