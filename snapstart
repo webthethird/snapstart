@@ -44,11 +44,32 @@ PROVIDER="${SNAPSTART_PROVIDER:-aws}"
 
 # State is per-provider. A single node.json meant provisioning on AWS silently
 # clobbered the record of a running Hetzner node — leaving a billing server with
-# no local trace of how to reach or destroy it. Keyed by provider, the two
-# coexist and `SNAPSTART_PROVIDER=hetzner ./snapstart status` targets the right
-# one. A legacy node.json is still honoured so older state keeps working.
+# no local trace of how to reach or destroy it.
 STATE_FILE="$STATE_DIR/node-$PROVIDER.json"
-[ -f "$STATE_FILE" ] || [ ! -f "$STATE_DIR/node.json" ] || STATE_FILE="$STATE_DIR/node.json"
+
+# A legacy node.json is honoured only when it actually belongs to this provider.
+# Matching on filename alone reintroduced the clobber: with PROVIDER=aws and a
+# Hetzner-era node.json present, provisioning would write AWS state over it.
+if [ ! -f "$STATE_FILE" ] && [ -f "$STATE_DIR/node.json" ]; then
+  if [ "$(jq -r '.provider // "hetzner"' "$STATE_DIR/node.json" 2>/dev/null)" = "$PROVIDER" ]; then
+    STATE_FILE="$STATE_DIR/node.json"
+  fi
+fi
+
+# Record infrastructure the moment it exists, never after. Anything between
+# creating a resource and persisting its id is a window where a failure leaves
+# something billing with no local record of it — which has already happened
+# twice here. Written via a temp file so an interrupt cannot truncate it.
+write_state() {
+  mkdir -p "$STATE_DIR"
+  cat > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+# Merge fields into existing state, e.g. an IP that only appears after boot.
+update_state() {
+  [ -f "$STATE_FILE" ] || die "no state to update"
+  jq "$@" "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+}
 
 # --- AWS -------------------------------------------------------------------
 #   m5.xlarge   4 vCPU / 16 GB — the instance the Snapchain docs specify
@@ -285,19 +306,25 @@ Quotas console. Nothing has been created."
     info "instance (exists)"
   fi
 
+  # Persist before waiting for anything. The instance is billing from the moment
+  # it exists, so its id has to be on disk even if every later step fails —
+  # otherwise destroy has nothing to work with.
+  jq -n --arg provider aws --arg iid "$instance_id" \
+     --arg region "$AWS_REGION" --arg type "$AWS_INSTANCE_TYPE" --argjson gb "$AWS_DISK_GB" \
+     '{provider:$provider,instance_id:$iid,region:$region,server_type:$type,disk_gb:$gb}' \
+     | write_state
+
   info "waiting for the instance to run"
-  aws_ec2 wait instance-running --instance-ids "$instance_id"
+  aws_ec2 wait instance-running --instance-ids "$instance_id" \
+    || die "instance never reached running state. It may still be billing: ./snapstart destroy"
 
   local ip
   ip=$(aws_ec2 describe-instances --instance-ids "$instance_id" \
         --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
-  [ -n "$ip" ] && [ "$ip" != "None" ] || die "instance has no public IP"
+  [ -n "$ip" ] && [ "$ip" != "None" ] \
+    || die "instance has no public IP. It is billing: ./snapstart destroy"
   info "ip $ip"
-
-  jq -n --arg provider aws --arg iid "$instance_id" --arg ip "$ip" \
-     --arg region "$AWS_REGION" --arg type "$AWS_INSTANCE_TYPE" --argjson gb "$AWS_DISK_GB" \
-     '{provider:$provider,instance_id:$iid,ip:$ip,region:$region,server_type:$type,disk_gb:$gb}' \
-     > "$STATE_FILE"
+  update_state --arg ip "$ip" '.ip = $ip'
 
   info "waiting for ssh"
   local ready=""
@@ -379,6 +406,15 @@ runcmd:
       user_data:$ud
     }')")
 
+  # Persist the server id immediately. Everything after this — IP assignment,
+  # volume creation, the quota check — can fail, and the server bills regardless.
+  # Recording it first is what makes the "run ./snapstart destroy" advice in
+  # those failure messages actually true.
+  jq -n --arg provider hetzner --argjson sid "$server_id" \
+     --arg type "$SERVER_TYPE" --arg loc "$LOCATION" --argjson gb "$VOLUME_GB" \
+     '{provider:$provider,server_id:$sid,server_type:$type,location:$loc,volume_gb:$gb}' \
+     | write_state
+
   # Wait for an IP before attaching storage.
   local ip=""
   for _ in $(seq 1 60); do
@@ -386,8 +422,9 @@ runcmd:
     [ -n "$ip" ] && break
     sleep 2
   done
-  [ -n "$ip" ] || die "server never got an IPv4 address"
+  [ -n "$ip" ] || die "server never got an IPv4 address. It is billing: ./snapstart destroy"
   info "ip $ip"
+  update_state --arg ip "$ip" '.ip = $ip'
 
   info "volume (${VOLUME_GB} GB)"
   local vol_id existing_vol
@@ -420,6 +457,7 @@ The server has been created and IS BILLING. Remove it with:
     check "$out" "creating volume"
     vol_id=$(echo "$out" | jq -r '.volume.id')
   fi
+  update_state --argjson vid "$vol_id" '.volume_id = $vid'
 
   local mount
   mount=$(api GET "/volumes/$vol_id" | jq -r '.volume.linux_device // empty')
@@ -460,11 +498,10 @@ The server has been created and IS BILLING. Remove it with:
     sleep 5
   done
 
-  jq -n --arg provider hetzner --argjson sid "$server_id" --argjson vid "$vol_id" --arg ip "$ip" \
-     --arg dev "$mount" --arg type "$SERVER_TYPE" --arg loc "$LOCATION" \
-     --argjson gb "$VOLUME_GB" \
-     '{provider:$provider,server_id:$sid,volume_id:$vid,ip:$ip,device:$dev,server_type:$type,location:$loc,volume_gb:$gb}' \
-     > "$STATE_FILE"
+  # Merge rather than overwrite: the ids were recorded as they were created, and
+  # rewriting the whole file here would reintroduce a window where a crash loses
+  # them.
+  update_state --arg dev "$mount" '.device = $dev'
 
   echo
   info "provisioned. details in $STATE_FILE"
@@ -721,7 +758,17 @@ cmd_ssh() {
 cmd_destroy() {
   need jq
   [ -f "$STATE_FILE" ] || die "nothing to destroy."
-  echo "This deletes the server and its disk. The restored database will be lost."
+
+  # Name what is about to die. The confirmation string is identical across
+  # providers, so a prompt that only says "snapstart-node" gives no way to tell
+  # which machine you are about to destroy when two exist.
+  echo
+  echo "About to destroy:"
+  printf "  %-10s %s\n" "provider" "$(jq -r '.provider // "hetzner"' "$STATE_FILE")"
+  printf "  %-10s %s\n" "ip" "$(jq -r '.ip // "unknown"' "$STATE_FILE")"
+  printf "  %-10s %s\n" "state" "$STATE_FILE"
+  echo
+  echo "The restored database goes with it — a fresh node re-syncs from scratch."
   read -rp "Type the server name ($NAME) to confirm: " confirm
   [ "$confirm" = "$NAME" ] || die "aborted."
   case "$(jq -r '.provider // "hetzner"' "$STATE_FILE")" in
@@ -735,27 +782,53 @@ destroy_aws() {
   local iid region
   iid=$(jq -r .instance_id "$STATE_FILE"); region=$(jq -r .region "$STATE_FILE")
 
+  # Capture the attached volumes BEFORE terminating. Afterwards the instance no
+  # longer reports them, so there is no way to check whether they actually went.
+  local volumes
+  volumes=$(aws ec2 --region "$region" describe-instances --instance-ids "$iid" \
+    --query 'Reservations[0].Instances[0].BlockDeviceMappings[].Ebs.VolumeId' \
+    --output text 2>/dev/null || true)
+
   aws ec2 --region "$region" terminate-instances --instance-ids "$iid" >/dev/null \
     || die "terminate failed; $STATE_FILE kept so you can retry. Check the EC2 console."
 
   info "waiting for termination"
   aws ec2 --region "$region" wait instance-terminated --instance-ids "$iid" 2>/dev/null || true
 
-  # Verify rather than trust. The root volume has DeleteOnTermination=true, so it
-  # goes with the instance — but confirm the instance really is gone before we
-  # throw away the only record of what to clean up.
-  local state
+  local failed=0 state
   state=$(aws ec2 --region "$region" describe-instances --instance-ids "$iid" \
             --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo gone)
-  if [ "$state" != "terminated" ] && [ "$state" != "gone" ]; then
-    echo "Instance is '$state', not terminated. $STATE_FILE kept." >&2
+  if [ "$state" = "terminated" ] || [ "$state" = "gone" ]; then
+    info "instance terminated"
+  else
+    info "INSTANCE IS '$state', NOT TERMINATED (id $iid)"; failed=1
+  fi
+
+  # The 2 TB root volume is the expensive part — about $160/month if it survives.
+  # DeleteOnTermination is supposed to take it, but "supposed to" is how you end
+  # up paying for storage attached to nothing. Check each one.
+  local v vstate
+  for v in $volumes; do
+    [ -n "$v" ] || continue
+    vstate=$(aws ec2 --region "$region" describe-volumes --volume-ids "$v" \
+              --query 'Volumes[0].State' --output text 2>/dev/null || echo gone)
+    if [ "$vstate" = "gone" ] || [ "$vstate" = "deleted" ] || [ "$vstate" = "deleting" ]; then
+      info "volume $v deleted"
+    else
+      info "VOLUME $v STILL EXISTS ($vstate) — IT IS BILLING"; failed=1
+    fi
+  done
+
+  if [ "$failed" = 1 ]; then
+    echo
+    echo "Teardown did NOT fully succeed. $STATE_FILE has been kept so you can retry." >&2
     echo "Check https://console.aws.amazon.com/ec2/ and confirm nothing is still billing." >&2
     exit 1
   fi
-  info "instance terminated (root volume deleted with it)"
 
   rm -f "$STATE_FILE"
-  info "done. The AWS credentials are no longer needed for this node."
+  info "done. The security group and key pair remain (both free); delete them in"
+  info "the console if you want the account completely clean."
 }
 
 destroy_hetzner() {
@@ -795,7 +868,9 @@ destroy_hetzner() {
   fi
 
   rm -f "$STATE_FILE"
-  info "done. The API token is no longer needed — delete it in the Hetzner console."
+  info "done. The SSH key and firewall remain (both free); delete them in the"
+  info "console if you want the project completely clean."
+  info "The API token is no longer needed — delete it too."
 }
 
 case "${1:-}" in
