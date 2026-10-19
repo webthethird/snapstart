@@ -13,7 +13,8 @@
     "register": "tsx --env-file-if-exists=.env scripts/register-fid.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsc --noEmit && tsx scripts/test-app-key.ts && tsx scripts/test-attribution.ts",
-    "ui": "tsx --env-file-if-exists=.env scripts/serve.ts"
+    "ui": "tsx --env-file-if-exists=.env scripts/serve.ts",
+    "client-create": "tsx --env-file-if-exists=.env scripts/client-create.ts"
   },
   "dependencies": {
     "@farcaster/core": "^0.20.0",

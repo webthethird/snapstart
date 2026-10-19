@@ -748,6 +748,20 @@ cmd_node_ready() {
 # anyone can query (or submit to) is a different matter — and grafana on :3000 is
 # not exposed at all. Tunnelling keeps the client's view private without widening
 # the firewall.
+# Issues this client its own app key. The seed phrase is prompted for, used
+# once, and never written anywhere — only the resulting Ed25519 key is saved.
+cmd_client_create() {
+  command -v node >/dev/null || die "node is required"
+  if ! curl -s --max-time 3 http://127.0.0.1:3381/v1/info >/dev/null 2>&1; then
+    die "Nothing is answering on 127.0.0.1:3381.
+
+Open the tunnel in another terminal first:
+
+    ./snapstart tunnel"
+  fi
+  exec npm run --silent client-create
+}
+
 # The UI runs HERE, on your machine, bound to 127.0.0.1. It reaches the node
 # through the tunnel. Nothing is exposed: no port is opened on the node, and no
 # password is needed because nothing off this machine can reach it.
@@ -965,8 +979,9 @@ case "${1:-}" in
   client)
     shift
     case "${1:-}" in
-      ui) shift; cmd_client_ui "$@" ;;
-      *) die "usage: ./snapstart client ui" ;;
+      create) shift; cmd_client_create "$@" ;;
+      ui)     shift; cmd_client_ui "$@" ;;
+      *) die "usage: ./snapstart client {create|ui}" ;;
     esac ;;
   ssh)       shift; cmd_ssh "$@" ;;
   destroy)   shift; cmd_destroy "$@" ;;
