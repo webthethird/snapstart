@@ -253,7 +253,152 @@ shard 1   13:16 UTC</code></pre>
   broken node healthy.
 </p>
 
-<p class="meta">Steps 2 and the safety notes are being written.</p>
+<h2 id="step2">2. Create the client</h2>
+
+<pre><code>./snapstart client create</code></pre>
+
+<p>
+  This asks for your seed phrase, uses it once to authorize an app key, and then forgets
+  it. From that point the client holds only the app key.
+</p>
+
+<h3 id="seeds">About that seed phrase</h3>
+
+<div class="warn">
+  <p><strong>Use a throwaway account. Not one you care about.</strong></p>
+  <p>
+    A client holding an app key can post as you. A client holding your <em>seed phrase</em>
+    can transfer your account away, change its recovery address, and spend anything in the
+    custody wallet. Those are not the same risk.
+  </p>
+  <p>
+    Registering a fresh account costs about <strong>$0.20</strong> — the docs say $10, but
+    <code>IdGateway.price()</code> currently returns roughly 0.0001&nbsp;ETH, which includes
+    the first storage unit. There is no good reason to test with an account that matters.
+  </p>
+</div>
+
+<p>
+  More generally: only paste a seed phrase into software whose source you have read, from
+  people you have reason to trust. <strong>That includes this project.</strong> The relevant
+  code is <a href="https://github.com/webthethird/snapstart/blob/main/scripts/app-key.ts"><code>scripts/app-key.ts</code></a>
+  — it is about 140 lines and worth the three minutes.
+</p>
+
+<p>
+  Where a flow supports delegated signer authorization instead of a seed phrase import,
+  prefer it. This tutorial imports a phrase because the exercise is to issue a key with
+  nothing else in the loop, not because it is the right pattern for a production client.
+</p>
+
+<h3>What issuing an app key actually does</h3>
+
+<p>
+  Registering a key used to require an Optimism transaction. Under FIP-272 it does not:
+  you submit a <code>KEY_ADD</code> message authorized by an EIP-712 signature from your
+  custody address. <strong>No gas, no transaction.</strong>
+</p>
+
+<p>Three signatures are involved, which is the part that trips people up:</p>
+
+<ol class="steps">
+  <li>a <strong>SignedKeyRequest</strong> — the requesting app saying "I asked for this key"</li>
+  <li>a <strong>KeyAdd</strong> signature from your custody address, authorizing the key, its scopes and its lifetime</li>
+  <li>the message envelope itself, signed by <em>the new key</em> — proof that whoever submits it actually holds it</li>
+</ol>
+
+<p>The key is deliberately limited:</p>
+
+<table>
+  <tr><td><strong>Scopes</strong></td><td>Only the message types the client sends. A key scoped to casting cannot follow anyone.</td></tr>
+  <tr><td><strong>TTL</strong></td><td>90 days, sliding — it refreshes on use, so abandoned keys expire by themselves.</td></tr>
+  <tr><td><strong>Nonce</strong></td><td>Strictly increasing per account, so an old authorization cannot be replayed.</td></tr>
+</table>
+
+<div class="note">
+  <p><strong>If you are writing this yourself:</strong> the gasless EIP-712 domain is
+  <code>{ name: "Farcaster KeyAdd", version: "1", chainId: 1 }</code> with no
+  <code>verifyingContract</code>. It sits beside near-identically named onchain helpers —
+  <code>signKeyRequest</code> vs <code>signGaslessKeyRequest</code> — and they are not
+  interchangeable. Using the wrong one produces a signature that verifies locally and is
+  rejected by the network.</p>
+  <p>Also: <code>deadline</code> is in <strong>Farcaster seconds</strong> (epoch
+  2021-01-01), not Unix seconds.</p>
+</div>
+
+<h3>Writes are confirmed, not assumed</h3>
+
+<p>
+  A node returns <code>200</code> once your message is well-formed and handed to the gossip
+  layer — and then discards what happens next. A node with no peers logs
+  <code>InsufficientPeers</code>, drops your cast, and still returns <code>200</code>.
+</p>
+
+<p>
+  So the client never trusts the status code. It knows the message hash before submitting,
+  and polls until the node reports it back. Blocks are about a second apart, measured at
+  the tip, so confirmation normally takes a few seconds; after 20 it reports honest failure
+  rather than claiming success.
+</p>
+
+<div class="note">
+  <p><strong>Do not post immediately after starting your node.</strong> It needs gossip
+  peers first, and until it has them your writes vanish with a <code>200</code>.</p>
+</div>
+
+<h2 id="attribution">Filtering by the client that posted</h2>
+
+<p>
+  Every cast carries the Ed25519 key that signed it. That key's registration records the
+  FID of the app that requested it, and that FID has a profile with a name:
+</p>
+
+<pre><code>cast.signer  →  the key's registration  →  requestFid  →  that app's name</code></pre>
+
+<p>
+  Posting through Warpcast means Warpcast's key signed your cast. So a feed can be filtered
+  by the software that produced it:
+</p>
+
+<pre><code>feed: 60 casts from 23 authors
+
+   45  warpcast
+   13  fireflyapp
+    1  greg
+    1  unknown client
+
+include ["warpcast"] -&gt; 45
+exclude ["warpcast"] -&gt; 15</code></pre>
+
+<p>
+  That output is from a real feed on a real node. Some casts are legitimately
+  unattributable — keys registered before the metadata existed, or self-issued keys with no
+  app behind them. Those render as <strong>unknown client</strong> and are never silently
+  dropped; a filter that hides posts because a lookup failed is a bug that looks like a
+  feature.
+</p>
+
+<h2 id="cost">What it costs, and how to stop paying</h2>
+
+<table>
+  <tr><th></th><th>AWS (default)</th><th>Hetzner</th></tr>
+  <tr><td>Instance</td><td>m5.xlarge — 4 vCPU / 16 GB</td><td>cx43 — 8 vCPU / 16 GB</td></tr>
+  <tr><td>Disk</td><td>2048 GB gp3</td><td>1024 GB volume</td></tr>
+  <tr><td>Cost</td><td>~$0.42/hr, ~$10/day</td><td>~€0.14/hr, ~€3.30/day</td></tr>
+  <tr><td>New account can finish?</td><td>yes</td><td><strong>no — volume quota</strong></td></tr>
+</table>
+
+<p>Both bill hourly. A tester runs a node for a day or two and destroys it:</p>
+
+<pre><code>./snapstart destroy</code></pre>
+
+<p>
+  It names what it is about to delete, then verifies the resources are actually gone before
+  discarding local state — and keeps that state if anything survived, so you can retry
+  rather than being told you have stopped paying when you have not.
+</p>
+
+<p class="meta">Troubleshooting section in progress. Step 2 is implemented but not yet verified end to end against a live node — this page will say so plainly until it is.</p>
 
 </div>
 </body>
