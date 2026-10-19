@@ -129,4 +129,5 @@ if (failed > 0) {
   process.exit(1);
 }
 console.log("\nFilter logic and metadata decode verified offline.");
-console.log("Live /v1/signer response shapes still need confirming against the node.");
+console.log("Live response shapes are covered separately by scripts/check-attribution.ts,");
+console.log("which has been run against mainnet (warpcast, fireflyapp, greg, unknown).");
