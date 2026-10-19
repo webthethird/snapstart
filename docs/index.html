@@ -102,7 +102,158 @@
 
 <hr>
 
-<p class="meta">This page is a work in progress — the tutorial sections are being written.</p>
+<hr>
+
+<h2>What you are actually building</h2>
+
+<p>
+  If you have run an Ethereum node, you already understand this. You can read chain data
+  from Alchemy with an API key and a rate limit, or you can run Reth yourself and query
+  <code>localhost</code> with nobody's permission. Farcaster has the same split:
+  <strong>Neynar is Alchemy, and a Snapchain read node is your own Reth.</strong>
+</p>
+
+<table>
+  <tr><th>Ethereum</th><th>Farcaster</th></tr>
+  <tr><td>Reth / Geth full node</td><td>Snapchain <strong>read node</strong> — stores all state, serves queries, cannot propose blocks</td></tr>
+  <tr><td>Validator</td><td>Snapchain validator — permissioned, gated on a key in a registry contract</td></tr>
+  <tr><td><code>eth_sendRawTransaction</code></td><td><code>submitMessage</code></td></tr>
+  <tr><td><code>eth_syncing</code></td><td><code>GET /v1/info</code></td></tr>
+  <tr><td>EOA private key</td><td><strong>Custody key</strong> — owns the account</td></tr>
+  <tr><td>Session key</td><td><strong>App key</strong> — scoped, expiring, revocable</td></tr>
+</table>
+
+<p>
+  You cannot run a validator: the validator set lives in a contract on Ethereum mainnet
+  and you are not in it. That is fine. A read node stores the full state and serves every
+  read API, which is everything a client needs.
+</p>
+
+<h3>Three identities, not one</h3>
+
+<p>Farcaster splits what Ethereum keeps together:</p>
+
+<table>
+  <tr><th>Layer</th><th>What it is</th><th>Cryptography</th></tr>
+  <tr><td><strong>FID</strong></td><td>Your account number</td><td>None — it is a <code>uint256</code> in a registry contract</td></tr>
+  <tr><td><strong>Custody address</strong></td><td>Owns the FID</td><td>secp256k1, from your seed phrase</td></tr>
+  <tr><td><strong>App key</strong></td><td>Signs your posts</td><td><strong>Ed25519</strong>, generated per client</td></tr>
+</table>
+
+<p>
+  An app key is a session key. Your custody key is the EOA that owns the account; the app
+  key is a scoped delegate you hand to a client so it can act without holding the keys to
+  everything. One account can have many — Warpcast holds one, your client holds another,
+  and revoking one does not touch the rest.
+</p>
+
+<p>
+  That is also why a cast can tell you which client posted it. The signature identifies
+  the <em>software</em>, not just the person, which is what makes
+  <a href="#attribution">filtering by client</a> possible at all.
+</p>
+
+<h2 id="step0">0. Provision the compute</h2>
+
+<pre><code>./snapstart provision</code></pre>
+
+<p>
+  Four API calls and a boot script. An SSH keypair dedicated to this node, a firewall, an
+  instance, and a disk — then cloud-init installs Docker. Nothing mystical.
+</p>
+
+<p>
+  Defaults to AWS. <strong>Hetzner is about a third the price but cannot complete a
+  restore on a new account</strong>: its default volume quota is 1024&nbsp;GB and the
+  restore peaks above that. Verified by probe — a resize to 1030&nbsp;GB is refused.
+  Use <code>SNAPSTART_PROVIDER=hetzner</code> if your quota has been raised.
+</p>
+
+<div class="warn">
+  <p><strong>New AWS accounts land on the Free Plan, which cannot run this.</strong>
+  The Free Plan refuses any instance type that is not free-tier eligible, and the largest
+  eligible type is 2&nbsp;vCPU / 8&nbsp;GiB where Snapchain needs 4 / 16. No quota increase
+  fixes it — you have to upgrade to a paid plan. Credits still apply.</p>
+</div>
+
+<h3>Only one credential, and the node never sees it</h3>
+
+<p>
+  The cloud API key belongs to the provisioning script, not to the node.
+  <code>provision</code>, <code>status</code> and <code>destroy</code> need it;
+  <code>node</code> and <code>client</code> do not. Once the node is running it holds no
+  credentials of any kind — no RPC endpoint, no data provider, nothing to sign up for.
+</p>
+
+<h2 id="step1">1. Start the read node</h2>
+
+<pre><code>./snapstart node up</code></pre>
+
+<p>
+  This installs upstream's <code>snapchain.sh</code>, writes its config without prompting,
+  and starts the node. It then restores from a snapshot — which is the slow part, and the
+  part with teeth.
+</p>
+
+<h3 id="timing">Timing, and why it matters</h3>
+
+<p>
+  Restoring takes <strong>8–12 hours</strong>. The docs say "up to 2 hours"; we measured
+  8h14m on one run and over 12 on another.
+</p>
+
+<p>
+  Snapchain regenerates each shard's snapshot daily and <strong>deletes the previous
+  one</strong>. The restore fetches a manifest once at the start, then downloads shards in
+  order. If a shard's snapshot is replaced before the restore reaches it, every chunk
+  request returns 404 and the node panics.
+</p>
+
+<p>Each shard rotates at a different time of day:</p>
+
+<pre><code>shard 0   05:18 UTC
+shard 2   08:03 UTC
+shard 1   13:16 UTC</code></pre>
+
+<p>
+  Which is why there is no safe fixed ordering, and why the practical advice is simply:
+  <strong>start between 05:20 and 21:00 UTC</strong>. Outside that window the restore
+  crosses a rotation.
+</p>
+
+<div class="warn">
+  <p><strong>The failure is silent, which is what makes it dangerous.</strong> After the
+  panic, Docker restarts the node. It finds a non-empty database, concludes it is already
+  bootstrapped, and starts serving — with one shard missing.</p>
+  <p>It then answers every read correctly, reports hundreds of millions of messages, and
+  <strong>rejects every write</strong> with <code>unknown fid</code>, because app-key
+  registration routes to the shard that never restored. Nothing in the logs or
+  <code>/v1/info</code> says so.</p>
+</div>
+
+<h3>Check readiness properly</h3>
+
+<pre><code>./snapstart node ready</code></pre>
+
+<p>
+  This is the check that matters. "The API responds" and "the database has data" are both
+  true of a broken node. <code>node ready</code> verifies every shard is present
+  <em>and</em> within 100 blocks of the tip, and fails explicitly if shard 0 is missing.
+</p>
+
+<pre><code>  shard           height          delay          messages  state
+  0             49007206              1                 0  ok
+  1             49007206              1         458606290  ok
+  2             48842741              1         455621742  ok
+
+  ready: all shards present and within 100 blocks of the tip</code></pre>
+
+<p class="meta">
+  Shard 0 holds no user messages, which is exactly why a message-count check would call a
+  broken node healthy.
+</p>
+
+<p class="meta">Steps 2 and the safety notes are being written.</p>
 
 </div>
 </body>
