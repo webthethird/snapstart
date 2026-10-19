@@ -6,8 +6,6 @@
 <title>snapstart — run your own Farcaster read node and client</title>
 <meta name="description" content="Run a Snapchain read node and a Farcaster client that reads from it, in three commands. No API keys.">
 
-<!-- Link previews. og:image must be absolute — relative paths are ignored by
-     every crawler that matters. -->
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://webthethird.github.io/snapstart/">
 <meta property="og:title" content="Run your own Farcaster client">
@@ -17,366 +15,440 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="snapstart — run your own Farcaster client, in three commands">
 <meta property="og:site_name" content="snapstart">
-
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Run your own Farcaster client">
 <meta name="twitter:description" content="A Snapchain read node you own, and a client that reads from it, in three commands. No API keys.">
 <meta name="twitter:image" content="https://webthethird.github.io/snapstart/og.png">
+
 <style>
-  :root {
-    --bg: #fbfaf8; --fg: #1a1a1a; --muted: #5c5c5c; --rule: #e2ded8;
-    --code-bg: #f3f0ec; --accent: #6b4de6; --warn-bg: #fff6e5; --warn-br: #e0a53a;
-    --ok-bg: #eef7ee; --ok-br: #4a9a55;
+:root{
+  --paper:#fbfaf8; --panel:#fff; --ink:#16161a; --body:#2a2926; --muted:#6c6760;
+  --rule:#e4dfd7; --accent:#6b4de6; --accent-ink:#5436c9; --soft:#f1edfd;
+  --code:#f3f0ea; --warn:#fff7e8; --warn-line:#d8a033; --ok:#3f8f4d;
+  --shadow:0 1px 2px rgba(22,22,26,.05), 0 8px 24px -12px rgba(22,22,26,.14);
+  /* The band is dark in both schemes. It must NOT derive from --ink, which inverts. */
+  --band:#16161a; --band-card:#1e1e23; --band-line:#2c2c33;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --paper:#111113; --panel:#18181b; --ink:#f2f0ed; --body:#d9d6d1; --muted:#94908a;
+    --rule:#2a2a2e; --accent:#a991ff; --accent-ink:#bda9ff; --soft:#201b33;
+    --code:#1d1d21; --warn:#2a2317; --warn-line:#b8862c; --ok:#5aa869;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.6);
+    /* Lifted off --paper so the band still reads as a distinct section. */
+    --band:#1b1b21; --band-card:#24242c; --band-line:#34343d;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #141414; --fg: #e8e6e3; --muted: #9a9693; --rule: #2e2c2a;
-      --code-bg: #1e1d1c; --accent: #a991ff; --warn-bg: #2b2317; --warn-br: #b8862c;
-      --ok-bg: #16231a; --ok-br: #4a9a55;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--fg);
-    font: 17px/1.65 ui-serif, Georgia, "Times New Roman", serif;
-    -webkit-text-size-adjust: 100%;
-  }
-  .wrap { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 6rem; }
-  h1 { font-size: 2.1rem; line-height: 1.15; margin: 0 0 .4rem; letter-spacing: -.02em; }
-  h2 { font-size: 1.45rem; margin: 3rem 0 .75rem; letter-spacing: -.01em; }
-  h3 { font-size: 1.1rem; margin: 2rem 0 .5rem; }
-  .lede { color: var(--muted); font-size: 1.1rem; margin: 0 0 2rem; }
-  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  code { background: var(--code-bg); padding: .12em .35em; border-radius: 3px; font-size: .88em; }
-  pre {
-    background: var(--code-bg); padding: 1rem 1.1rem; border-radius: 6px;
-    overflow-x: auto; font-size: .85rem; line-height: 1.55; margin: 1rem 0;
-  }
-  pre code { background: none; padding: 0; font-size: inherit; }
-  a { color: var(--accent); }
-  .note, .warn {
-    border-left: 3px solid var(--ok-br); background: var(--ok-bg);
-    padding: .85rem 1rem; border-radius: 0 5px 5px 0; margin: 1.25rem 0; font-size: .95rem;
-  }
-  .warn { border-left-color: var(--warn-br); background: var(--warn-bg); }
-  .note p:first-child, .warn p:first-child { margin-top: 0; }
-  .note p:last-child, .warn p:last-child { margin-bottom: 0; }
-  table { border-collapse: collapse; width: 100%; margin: 1.25rem 0; font-size: .92rem; }
-  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--rule); }
-  th { font-weight: 600; }
-  hr { border: 0; border-top: 1px solid var(--rule); margin: 3rem 0; }
-  .meta { color: var(--muted); font-size: .9rem; }
-  ol.steps { padding-left: 1.2rem; }
-  ol.steps > li { margin: .4rem 0; }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth; scroll-padding-top:5rem}
+body{
+  margin:0; overflow-x:hidden; background:var(--paper); color:var(--body);
+  font:17px/1.65 ui-serif,Georgia,"Iowan Old Style","Times New Roman",serif;
+  -webkit-font-smoothing:antialiased; -webkit-text-size-adjust:100%;
+}
+.wrap{max-width:62rem;margin:0 auto;padding:0 1.25rem}
+.narrow{max-width:44rem}
+code,kbd,pre,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+/* header ------------------------------------------------------------------ */
+header.nav{
+  position:sticky; top:0; z-index:50; background:color-mix(in srgb,var(--paper) 88%,transparent);
+  backdrop-filter:saturate(180%) blur(10px); border-bottom:1px solid var(--rule);
+}
+.nav-in{display:flex;align-items:center;gap:1.25rem;height:3.5rem}
+.mark{display:flex;align-items:center;gap:.55rem;font-weight:700;color:var(--ink);text-decoration:none;letter-spacing:-.01em}
+.mark .glyph{
+  width:1.6rem;height:1.6rem;border-radius:6px;background:var(--accent);color:#fff;
+  display:grid;place-items:center;font:700 .82rem/1 ui-monospace,monospace;letter-spacing:-.04em;
+}
+nav.links{display:none;gap:1.4rem;margin-left:auto;font-size:.92rem}
+nav.links a{color:var(--muted);text-decoration:none}
+nav.links a:hover{color:var(--accent)}
+.src{margin-left:auto;font-size:.9rem;color:var(--muted);text-decoration:none}
+nav.links ~ .src{margin-left:0}
+.src:hover{color:var(--accent)}
+@media(min-width:780px){nav.links{display:flex}}
+
+/* type -------------------------------------------------------------------- */
+.eyebrow{
+  font:600 .74rem/1 ui-monospace,monospace; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--accent); margin:0 0 .9rem;
+}
+h1{font-size:clamp(2.2rem,5vw,3.4rem);line-height:1.03;letter-spacing:-.03em;color:var(--ink);margin:0 0 1.1rem}
+h1 .tint{color:var(--accent)}
+h2{font-size:clamp(1.6rem,3.2vw,2.1rem);line-height:1.15;letter-spacing:-.02em;color:var(--ink);margin:0 0 .7rem}
+h3{font-size:1.12rem;color:var(--ink);margin:2rem 0 .4rem}
+.lede{font-size:clamp(1.05rem,2vw,1.22rem);color:var(--muted);margin:0 0 1.8rem;max-width:34ch}
+section{padding:4rem 0;border-top:1px solid var(--rule)}
+section:first-of-type{border-top:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+
+/* hero -------------------------------------------------------------------- */
+.hero{display:grid;gap:2.5rem;align-items:center;padding:3.5rem 0 4rem}
+.hero>*{min-width:0}
+.term,.term-in{min-width:0}
+@media(min-width:900px){.hero{grid-template-columns:1fr 1.08fr;gap:3.5rem;padding:5rem 0}}
+.cta{display:flex;gap:.7rem;flex-wrap:wrap;align-items:center}
+.btn{
+  display:inline-flex;align-items:center;gap:.45rem;background:var(--ink);color:var(--paper);
+  text-decoration:none;font:600 .95rem/1 inherit;padding:.8rem 1.15rem;border-radius:8px;border:0;cursor:pointer;
+}
+.btn.alt{background:transparent;color:var(--ink);border:1px solid var(--rule)}
+
+/* terminal ---------------------------------------------------------------- */
+.term{position:relative}
+.term::after{content:none}
+@media(min-width:900px){
+  .term::after{content:"";position:absolute;inset:auto -10px -10px auto;width:100%;height:100%;border-radius:12px;background:var(--accent);z-index:0;opacity:.95}
+}
+.term-in{position:relative;z-index:1;background:#15151a;border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+.term-top{display:flex;align-items:center;justify-content:space-between;padding:.7rem .95rem;border-bottom:1px solid #26262d;font:.75rem/1 ui-monospace,monospace;color:#7e7a90}
+.cmd{display:flex;align-items:center;gap:.85rem;padding:.95rem;border-bottom:1px solid #212128}
+.cmd:last-child{border-bottom:0}
+.num{flex:none;width:1.75rem;height:1.75rem;border:1px solid #33333d;border-radius:6px;display:grid;place-items:center;font:600 .8rem/1 ui-monospace,monospace;color:#a991ff}
+.cmd-body{min-width:0;flex:1}
+.cmd-label{font:.68rem/1 ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:#6f6b80;margin-bottom:.3rem}
+.cmd-line{font:.92rem/1.4 ui-monospace,monospace;color:#e8e6f0;overflow-x:auto;white-space:nowrap}
+.cmd-line .p{color:#64d18a}
+.copy{flex:none;background:transparent;border:1px solid #33333d;color:#8e8a9e;border-radius:6px;padding:.3rem .5rem;font:.72rem/1 ui-monospace,monospace;cursor:pointer}
+.copy:hover{color:#fff;border-color:#55505f}
+.copy.done{color:#64d18a;border-color:#2f6b43}
+
+/* cards ------------------------------------------------------------------- */
+.grid{display:grid;gap:1rem}
+@media(min-width:680px){.grid.g2{grid-template-columns:1fr 1fr}.grid.g4{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:960px){.grid.g3{grid-template-columns:repeat(3,1fr)}.grid.g4{grid-template-columns:repeat(4,1fr)}}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:1.1rem 1.15rem}
+.card .k{font:600 .72rem/1 ui-monospace,monospace;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:.5rem}
+.card .v{font-size:1.55rem;line-height:1.1;color:var(--ink);letter-spacing:-.02em}
+.card .v small{font-size:.92rem;color:var(--muted);letter-spacing:0}
+.card p{margin:.45rem 0 0;font-size:.92rem;color:var(--muted)}
+
+/* callouts ---------------------------------------------------------------- */
+.callout{border-left:3px solid var(--warn-line);background:var(--warn);padding:1rem 1.15rem;border-radius:0 8px 8px 0;margin:1.5rem 0}
+.callout.good{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,transparent)}
+.callout p:last-child{margin-bottom:0}
+.callout strong{color:var(--ink)}
+
+/* dark band --------------------------------------------------------------- */
+.band{background:var(--band);color:#d9d6d1;border:0}
+.band h2,.band strong{color:#fff}
+.band .eyebrow{color:#a991ff}
+.band code{background:var(--band-card);color:#e8e6f0}
+.band .card{background:var(--band-card);border-color:var(--band-line)}
+.band .card .v,.band .card .k{color:#fff}
+.band .card .k{color:#8e8a9e}
+.band .card p{color:#a5a1aa}
+
+/* code & tables ----------------------------------------------------------- */
+pre{background:var(--code);border:1px solid var(--rule);border-radius:9px;padding:.95rem 1.05rem;overflow-x:auto;font-size:.84rem;line-height:1.6;margin:1.1rem 0}
+.band pre{background:var(--band-card);border-color:var(--band-line);color:#d9d6d1}
+code{background:var(--code);padding:.12em .36em;border-radius:4px;font-size:.88em}
+pre code{background:none;padding:0;font-size:inherit}
+table{border-collapse:collapse;width:100%;margin:1.2rem 0;font-size:.93rem}
+th,td{text-align:left;padding:.6rem .7rem;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font:600 .74rem/1.3 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+tbody tr:last-child td{border-bottom:0}
+
+/* details ----------------------------------------------------------------- */
+details{border-bottom:1px solid var(--rule)}
+details summary{cursor:pointer;list-style:none;padding:1rem 2rem 1rem 0;position:relative;color:var(--ink);font-weight:600}
+details summary::-webkit-details-marker{display:none}
+details summary::after{content:"+";position:absolute;right:.4rem;top:.9rem;color:var(--muted);font:400 1.3rem/1 ui-monospace,monospace}
+details[open] summary::after{content:"\2212"}
+details .inner{padding:0 0 1.1rem;font-size:.96rem}
+details .inner p:last-child{margin-bottom:0}
+
+.meta{color:var(--muted);font-size:.9rem}
+footer{border-top:1px solid var(--rule);padding:2.5rem 0 4rem;font-size:.9rem;color:var(--muted)}
+ul.plain{margin:0 0 1rem;padding-left:1.15rem}
+ul.plain li{margin:.35rem 0}
 </style>
 </head>
 <body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="mark" href="#top"><span class="glyph">s</span> snapstart</a>
+    <nav class="links">
+      <a href="#quickstart">Quickstart</a>
+      <a href="#concepts">Concepts</a>
+      <a href="#step1">The node</a>
+      <a href="#step2">The client</a>
+      <a href="#trouble">Troubleshooting</a>
+    </nav>
+    <a class="src" href="https://github.com/webthethird/snapstart">Source ↗</a>
+  </div>
+</header>
+
+<main id="top">
 <div class="wrap">
 
-<h1>Run your own Farcaster client</h1>
-<p class="lede">
-  A Snapchain read node you own, and a client that reads from it — in three commands.
-  No API keys, no hosted data provider, nobody's rate limit.
-</p>
+  <div class="hero">
+    <div>
+      <p class="eyebrow">Farcaster on infrastructure you own</p>
+      <h1>Run your own<br><span class="tint">Farcaster client.</span></h1>
+      <p class="lede">
+        A Snapchain read node you own, and a client that reads from it.
+        No API keys, no hosted provider, nobody's rate limit.
+      </p>
+      <div class="cta">
+        <a class="btn" href="#quickstart">Start here ↓</a>
+        <a class="btn alt" href="https://github.com/webthethird/snapstart">View source</a>
+      </div>
+    </div>
 
-<h2>Quickstart</h2>
+    <div class="term">
+      <div class="term-in">
+        <div class="term-top"><span>~/snapstart</span><span>3 commands</span></div>
+        <div class="cmd">
+          <span class="num">1</span>
+          <div class="cmd-body">
+            <div class="cmd-label">Compute</div>
+            <div class="cmd-line"><span class="p">$</span> ./snapstart provision</div>
+          </div>
+          <button class="copy" data-copy="./snapstart provision">copy</button>
+        </div>
+        <div class="cmd">
+          <span class="num">2</span>
+          <div class="cmd-body">
+            <div class="cmd-label">Snapchain</div>
+            <div class="cmd-line"><span class="p">$</span> ./snapstart node up</div>
+          </div>
+          <button class="copy" data-copy="./snapstart node up">copy</button>
+        </div>
+        <div class="cmd">
+          <span class="num">3</span>
+          <div class="cmd-body">
+            <div class="cmd-label">Client</div>
+            <div class="cmd-line"><span class="p">$</span> ./snapstart client create</div>
+          </div>
+          <button class="copy" data-copy="./snapstart client create">copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
+  <section id="quickstart">
+    <p class="eyebrow">Quickstart</p>
+    <h2>Clone it, then run three commands.</h2>
+    <p class="narrow">
+      Everything below explains what each command does, what the protocol is doing
+      underneath, and the ways it goes wrong — all of which we hit while building it.
+    </p>
 <pre><code>git clone https://github.com/webthethird/snapstart &amp;&amp; cd snapstart
 
-./snapstart provision      # 0. furnish the compute
-./snapstart node up        # 1. start a Snapchain read node
-./snapstart client create  # 2. issue an app key and launch the client</code></pre>
+./snapstart provision      <span class="meta"># 0. furnish the compute</span>
+./snapstart node up        <span class="meta"># 1. start a Snapchain read node</span>
+./snapstart client create  <span class="meta"># 2. issue an app key and launch the client</span></code></pre>
 
-<p>
-  That is the whole thing. The rest of this page explains what each command does, what
-  the protocol is doing underneath, and the ways it can go wrong — all of which we hit
-  while building it.
-</p>
-
-<div class="warn">
-  <p><strong>Before you start the node, check the clock.</strong> Step 1 takes
-  8–12 hours, and Snapchain replaces its snapshots daily while deleting the previous
-  ones. A restore that runs past a rotation fails — and fails in a way that leaves you
-  with a node that looks healthy and silently refuses to post.</p>
-  <p>Start step 1 between <strong>05:20 and 21:00 UTC</strong>. See
-  <a href="#timing">Timing</a> for why.</p>
+    <div class="grid g4" style="margin-top:2rem">
+      <div class="card"><div class="k">Cost</div><div class="v">~$10<small>/day</small></div><p>Hourly billing. Destroy it when you're done.</p></div>
+      <div class="card"><div class="k">First sync</div><div class="v">8–12<small> hours</small></div><p>Docs say two. We measured otherwise, twice.</p></div>
+      <div class="card"><div class="k">API keys</div><div class="v">Zero</div><p>The node holds no credentials once running.</p></div>
+      <div class="card"><div class="k">Licence</div><div class="v">MIT</div><p>Every number here measured on a live node.</p></div>
+    </div>
+  </section>
 </div>
 
-<h2>What you need first</h2>
+<section class="band">
+  <div class="wrap">
+    <p class="eyebrow">Read this before step 1</p>
+    <h2>Check the clock before you start the node.</h2>
+    <p class="narrow" style="color:#c9c5c0">
+      Snapchain replaces each shard's snapshot daily and deletes the previous one.
+      A restore takes 8–12 hours, so one started at the wrong hour crosses a rotation
+      and dies — leaving a node that looks healthy and silently refuses to post.
+    </p>
+    <div class="grid g3" style="margin-top:1.8rem">
+      <div class="card"><div class="k">Start between</div><div class="v">05:20–21:00<small> UTC</small></div><p>Outside this window the restore crosses a snapshot rotation.</p></div>
+      <div class="card"><div class="k">Rotation times</div><div class="v mono" style="font-size:1rem">shard 0 — 05:18<br>shard 2 — 08:03<br>shard 1 — 13:16</div><p>All UTC. Each shard rotates independently.</p></div>
+      <div class="card"><div class="k">If it fails</div><div class="v">Silently</div><p>Reads keep working. Every write is rejected. Nothing logs it.</p></div>
+    </div>
+  </div>
+</section>
 
-<table>
-  <tr><th>Thing</th><th>Why</th><th>Cost</th></tr>
-  <tr><td>A Farcaster account with storage</td><td>The client posts as you</td><td>~$0.20 if you register one</td></tr>
-  <tr><td>Its seed phrase</td><td>To authorize an app key, once</td><td>—</td></tr>
-  <tr><td>An AWS or Hetzner account</td><td>To run the node</td><td>~$10/day, destroy when done</td></tr>
-</table>
+<div class="wrap">
 
-<p class="meta">
-  Every figure on this page was measured on a running node, not taken from
-  documentation. Where our numbers disagree with the official docs, we have said so and
-  filed the correction upstream.
-</p>
+  <section id="concepts">
+    <p class="eyebrow">Concepts</p>
+    <h2>What you are actually building.</h2>
+    <p class="narrow">
+      If you have run an Ethereum node, you already understand this. You can read chain
+      data from Alchemy with an API key and a rate limit, or run Reth yourself and query
+      <code>localhost</code> with nobody's permission. Farcaster has the same split:
+      <strong>Neynar is Alchemy, a Snapchain read node is your own Reth.</strong>
+    </p>
 
-<hr>
+    <table>
+      <thead><tr><th>Ethereum</th><th>Farcaster</th></tr></thead>
+      <tbody>
+        <tr><td>Reth / Geth full node</td><td><strong>Read node</strong> — stores all state, serves queries, cannot propose blocks</td></tr>
+        <tr><td>Validator</td><td>Validator — permissioned, gated on a key in a registry contract</td></tr>
+        <tr><td><code>eth_sendRawTransaction</code></td><td><code>submitMessage</code></td></tr>
+        <tr><td><code>eth_syncing</code></td><td><code>GET /v1/info</code></td></tr>
+        <tr><td>EOA private key</td><td><strong>Custody key</strong> — owns the account</td></tr>
+        <tr><td>Session key</td><td><strong>App key</strong> — scoped, expiring, revocable</td></tr>
+      </tbody>
+    </table>
 
-<hr>
+    <p class="narrow">
+      You cannot run a validator — the validator set lives in a contract and you are not
+      in it. That is fine. A read node stores full state and serves every read API, which
+      is everything a client needs.
+    </p>
 
-<h2>What you are actually building</h2>
+    <h3>Three identities, not one</h3>
+    <div class="grid g3">
+      <div class="card"><div class="k">FID</div><div class="v">Your account</div><p>A <code>uint256</code> in a registry contract. No cryptography of its own.</p></div>
+      <div class="card"><div class="k">Custody address</div><div class="v">Owns it</div><p>secp256k1, derived from your seed phrase. Never touches the node.</p></div>
+      <div class="card"><div class="k">App key</div><div class="v">Signs posts</div><p>Ed25519, generated per client. Scoped, expiring, revocable.</p></div>
+    </div>
+    <p class="narrow" style="margin-top:1.2rem">
+      An app key is a session key. One account can have many — Warpcast holds one, your
+      client holds another, and revoking one does not touch the rest. That is also why a
+      cast can tell you which client posted it: the signature identifies the
+      <em>software</em>, not just the person.
+    </p>
+  </section>
 
-<p>
-  If you have run an Ethereum node, you already understand this. You can read chain data
-  from Alchemy with an API key and a rate limit, or you can run Reth yourself and query
-  <code>localhost</code> with nobody's permission. Farcaster has the same split:
-  <strong>Neynar is Alchemy, and a Snapchain read node is your own Reth.</strong>
-</p>
+  <section id="step0">
+    <p class="eyebrow">Command 0</p>
+    <h2>Provision the compute.</h2>
+    <pre><code>./snapstart provision</code></pre>
+    <p class="narrow">
+      Four API calls and a boot script: an SSH keypair dedicated to this node, a firewall,
+      an instance, a disk — then cloud-init installs Docker. Nothing mystical.
+    </p>
 
-<table>
-  <tr><th>Ethereum</th><th>Farcaster</th></tr>
-  <tr><td>Reth / Geth full node</td><td>Snapchain <strong>read node</strong> — stores all state, serves queries, cannot propose blocks</td></tr>
-  <tr><td>Validator</td><td>Snapchain validator — permissioned, gated on a key in a registry contract</td></tr>
-  <tr><td><code>eth_sendRawTransaction</code></td><td><code>submitMessage</code></td></tr>
-  <tr><td><code>eth_syncing</code></td><td><code>GET /v1/info</code></td></tr>
-  <tr><td>EOA private key</td><td><strong>Custody key</strong> — owns the account</td></tr>
-  <tr><td>Session key</td><td><strong>App key</strong> — scoped, expiring, revocable</td></tr>
-</table>
+    <div class="callout">
+      <p><strong>New AWS accounts land on the Free Plan, which cannot run this.</strong>
+      It refuses any instance type that is not free-tier eligible, and the largest eligible
+      type is 2&nbsp;vCPU / 8&nbsp;GiB where Snapchain needs 4 / 16. No quota increase fixes
+      it — you have to upgrade to a paid plan. Credits still apply.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Hetzner is a third the price and cannot finish on a new account.</strong>
+      Its default volume quota is 1024&nbsp;GB and the restore peaks above that — verified
+      by probe, a resize to 1030&nbsp;GB is refused. Use
+      <code>SNAPSTART_PROVIDER=hetzner</code> only if your quota has been raised.</p>
+    </div>
 
-<p>
-  You cannot run a validator: the validator set lives in a contract on Ethereum mainnet
-  and you are not in it. That is fine. A read node stores the full state and serves every
-  read API, which is everything a client needs.
-</p>
+    <h3>One credential, and the node never sees it</h3>
+    <p class="narrow">
+      The cloud API key belongs to the provisioning script. <code>provision</code>,
+      <code>status</code> and <code>destroy</code> need it; <code>node</code> and
+      <code>client</code> do not. Once running, the node holds no credentials of any kind.
+    </p>
+  </section>
 
-<h3>Three identities, not one</h3>
+  <section id="step1">
+    <p class="eyebrow">Command 1</p>
+    <h2>Start the read node.</h2>
+    <pre><code>./snapstart node up</code></pre>
+    <p class="narrow">
+      Installs upstream's <code>snapchain.sh</code>, writes its config without prompting,
+      and starts the node. It then restores from a snapshot — the slow part, and the part
+      with teeth. See the <a href="#top">timing window</a> above.
+    </p>
 
-<p>Farcaster splits what Ethereum keeps together:</p>
-
-<table>
-  <tr><th>Layer</th><th>What it is</th><th>Cryptography</th></tr>
-  <tr><td><strong>FID</strong></td><td>Your account number</td><td>None — it is a <code>uint256</code> in a registry contract</td></tr>
-  <tr><td><strong>Custody address</strong></td><td>Owns the FID</td><td>secp256k1, from your seed phrase</td></tr>
-  <tr><td><strong>App key</strong></td><td>Signs your posts</td><td><strong>Ed25519</strong>, generated per client</td></tr>
-</table>
-
-<p>
-  An app key is a session key. Your custody key is the EOA that owns the account; the app
-  key is a scoped delegate you hand to a client so it can act without holding the keys to
-  everything. One account can have many — Warpcast holds one, your client holds another,
-  and revoking one does not touch the rest.
-</p>
-
-<p>
-  That is also why a cast can tell you which client posted it. The signature identifies
-  the <em>software</em>, not just the person, which is what makes
-  <a href="#attribution">filtering by client</a> possible at all.
-</p>
-
-<h2 id="step0">0. Provision the compute</h2>
-
-<pre><code>./snapstart provision</code></pre>
-
-<p>
-  Four API calls and a boot script. An SSH keypair dedicated to this node, a firewall, an
-  instance, and a disk — then cloud-init installs Docker. Nothing mystical.
-</p>
-
-<p>
-  Defaults to AWS. <strong>Hetzner is about a third the price but cannot complete a
-  restore on a new account</strong>: its default volume quota is 1024&nbsp;GB and the
-  restore peaks above that. Verified by probe — a resize to 1030&nbsp;GB is refused.
-  Use <code>SNAPSTART_PROVIDER=hetzner</code> if your quota has been raised.
-</p>
-
-<div class="warn">
-  <p><strong>New AWS accounts land on the Free Plan, which cannot run this.</strong>
-  The Free Plan refuses any instance type that is not free-tier eligible, and the largest
-  eligible type is 2&nbsp;vCPU / 8&nbsp;GiB where Snapchain needs 4 / 16. No quota increase
-  fixes it — you have to upgrade to a paid plan. Credits still apply.</p>
-</div>
-
-<h3>Only one credential, and the node never sees it</h3>
-
-<p>
-  The cloud API key belongs to the provisioning script, not to the node.
-  <code>provision</code>, <code>status</code> and <code>destroy</code> need it;
-  <code>node</code> and <code>client</code> do not. Once the node is running it holds no
-  credentials of any kind — no RPC endpoint, no data provider, nothing to sign up for.
-</p>
-
-<h2 id="step1">1. Start the read node</h2>
-
-<pre><code>./snapstart node up</code></pre>
-
-<p>
-  This installs upstream's <code>snapchain.sh</code>, writes its config without prompting,
-  and starts the node. It then restores from a snapshot — which is the slow part, and the
-  part with teeth.
-</p>
-
-<h3 id="timing">Timing, and why it matters</h3>
-
-<p>
-  Restoring takes <strong>8–12 hours</strong>. The docs say "up to 2 hours"; we measured
-  8h14m on one run and over 12 on another.
-</p>
-
-<p>
-  Snapchain regenerates each shard's snapshot daily and <strong>deletes the previous
-  one</strong>. The restore fetches a manifest once at the start, then downloads shards in
-  order. If a shard's snapshot is replaced before the restore reaches it, every chunk
-  request returns 404 and the node panics.
-</p>
-
-<p>Each shard rotates at a different time of day:</p>
-
-<pre><code>shard 0   05:18 UTC
-shard 2   08:03 UTC
-shard 1   13:16 UTC</code></pre>
-
-<p>
-  Which is why there is no safe fixed ordering, and why the practical advice is simply:
-  <strong>start between 05:20 and 21:00 UTC</strong>. Outside that window the restore
-  crosses a rotation.
-</p>
-
-<div class="warn">
-  <p><strong>The failure is silent, which is what makes it dangerous.</strong> After the
-  panic, Docker restarts the node. It finds a non-empty database, concludes it is already
-  bootstrapped, and starts serving — with one shard missing.</p>
-  <p>It then answers every read correctly, reports hundreds of millions of messages, and
-  <strong>rejects every write</strong> with <code>unknown fid</code>, because app-key
-  registration routes to the shard that never restored. Nothing in the logs or
-  <code>/v1/info</code> says so.</p>
-</div>
-
-<h3>Check readiness properly</h3>
-
-<pre><code>./snapstart node ready</code></pre>
-
-<p>
-  This is the check that matters. "The API responds" and "the database has data" are both
-  true of a broken node. <code>node ready</code> verifies every shard is present
-  <em>and</em> within 100 blocks of the tip, and fails explicitly if shard 0 is missing.
-</p>
-
+    <h3>Check readiness properly</h3>
+    <pre><code>./snapstart node ready</code></pre>
+    <p class="narrow">
+      "The API responds" and "the database has data" are both true of a broken node.
+      This verifies every shard is present <em>and</em> within 100 blocks of the tip.
+    </p>
 <pre><code>  shard           height          delay          messages  state
   0             49007206              1                 0  ok
   1             49007206              1         458606290  ok
   2             48842741              1         455621742  ok
 
   ready: all shards present and within 100 blocks of the tip</code></pre>
+    <p class="meta narrow">
+      Shard 0 holds no user messages — which is exactly why a message-count check would
+      call a broken node healthy.
+    </p>
+  </section>
 
-<p class="meta">
-  Shard 0 holds no user messages, which is exactly why a message-count check would call a
-  broken node healthy.
-</p>
+  <section id="step2">
+    <p class="eyebrow">Command 2</p>
+    <h2>Create the client.</h2>
+    <pre><code>./snapstart client create</code></pre>
+    <p class="narrow">
+      Asks for your seed phrase, uses it once to authorize an app key, then forgets it.
+      From that point the client holds only the app key.
+    </p>
 
-<h2 id="step2">2. Create the client</h2>
+    <div class="callout">
+      <p><strong>Use a throwaway account. Not one you care about.</strong></p>
+      <p>A client holding an app key can post as you. A client holding your
+      <em>seed phrase</em> can transfer your account away, change its recovery address, and
+      spend from the custody wallet. Those are not the same risk.</p>
+      <p>Registering a fresh account costs about <strong>$0.20</strong> — the docs say $10,
+      but <code>IdGateway.price()</code> returns roughly 0.0001&nbsp;ETH, including the
+      first storage unit. There is no good reason to test with an account that matters.</p>
+    </div>
 
-<pre><code>./snapstart client create</code></pre>
+    <p class="narrow">
+      Only paste a seed phrase into software whose source you have read, from people you
+      have reason to trust. <strong>That includes this project.</strong> The code that
+      touches the phrase is
+      <a href="https://github.com/webthethird/snapstart/blob/main/scripts/app-key.ts"><code>scripts/app-key.ts</code></a>
+      — about 140 lines, worth the three minutes.
+    </p>
 
-<p>
-  This asks for your seed phrase, uses it once to authorize an app key, and then forgets
-  it. From that point the client holds only the app key.
-</p>
+    <h3>What issuing an app key actually does</h3>
+    <p class="narrow">
+      Registering a key used to need an Optimism transaction. Under FIP-272 it does not:
+      you submit a <code>KEY_ADD</code> message authorized by an EIP-712 signature from
+      your custody address. <strong>No gas, no transaction.</strong> Three signatures are
+      involved:
+    </p>
+    <ul class="plain narrow">
+      <li>a <strong>SignedKeyRequest</strong> — the app saying "I asked for this key"</li>
+      <li>a <strong>KeyAdd</strong> signature from your custody address, authorizing the key, its scopes and lifetime</li>
+      <li>the envelope itself, signed by <em>the new key</em> — proof whoever submits it holds it</li>
+    </ul>
 
-<h3 id="seeds">About that seed phrase</h3>
+    <div class="grid g3" style="margin-top:1.4rem">
+      <div class="card"><div class="k">Scopes</div><div class="v">6 types</div><p>Only what the client sends. A key scoped to casting cannot follow anyone.</p></div>
+      <div class="card"><div class="k">Lifetime</div><div class="v">90 days</div><p>Sliding — it refreshes on use, so abandoned keys expire by themselves.</p></div>
+      <div class="card"><div class="k">Replay</div><div class="v">Nonce</div><p>Strictly increasing per account, so an old authorization cannot be reused.</p></div>
+    </div>
 
-<div class="warn">
-  <p><strong>Use a throwaway account. Not one you care about.</strong></p>
-  <p>
-    A client holding an app key can post as you. A client holding your <em>seed phrase</em>
-    can transfer your account away, change its recovery address, and spend anything in the
-    custody wallet. Those are not the same risk.
-  </p>
-  <p>
-    Registering a fresh account costs about <strong>$0.20</strong> — the docs say $10, but
-    <code>IdGateway.price()</code> currently returns roughly 0.0001&nbsp;ETH, which includes
-    the first storage unit. There is no good reason to test with an account that matters.
-  </p>
-</div>
+    <div class="callout good" style="margin-top:1.6rem">
+      <p><strong>Writing this yourself?</strong> The gasless EIP-712 domain is
+      <code>{ name: "Farcaster KeyAdd", version: "1", chainId: 1 }</code> with no
+      <code>verifyingContract</code>, and it sits beside near-identically named onchain
+      helpers. Using the wrong one produces a signature that verifies locally and is
+      rejected by the network. Also, <code>deadline</code> is in <strong>Farcaster
+      seconds</strong> (epoch 2021-01-01), not Unix seconds.</p>
+    </div>
 
-<p>
-  More generally: only paste a seed phrase into software whose source you have read, from
-  people you have reason to trust. <strong>That includes this project.</strong> The relevant
-  code is <a href="https://github.com/webthethird/snapstart/blob/main/scripts/app-key.ts"><code>scripts/app-key.ts</code></a>
-  — it is about 140 lines and worth the three minutes.
-</p>
+    <h3>Writes are confirmed, not assumed</h3>
+    <p class="narrow">
+      A node returns <code>200</code> once your message is well-formed and handed to the
+      gossip layer — then discards what happens next. A node with no peers logs
+      <code>InsufficientPeers</code>, drops your cast, and still returns <code>200</code>.
+      So the client never trusts the status code: it knows the message hash before
+      submitting and polls until the node reports it back.
+    </p>
+    <div class="callout">
+      <p><strong>Do not post immediately after starting your node.</strong> It needs gossip
+      peers first, and until it has them your writes vanish with a <code>200</code>.</p>
+    </div>
+  </section>
 
-<p>
-  Where a flow supports delegated signer authorization instead of a seed phrase import,
-  prefer it. This tutorial imports a phrase because the exercise is to issue a key with
-  nothing else in the loop, not because it is the right pattern for a production client.
-</p>
-
-<h3>What issuing an app key actually does</h3>
-
-<p>
-  Registering a key used to require an Optimism transaction. Under FIP-272 it does not:
-  you submit a <code>KEY_ADD</code> message authorized by an EIP-712 signature from your
-  custody address. <strong>No gas, no transaction.</strong>
-</p>
-
-<p>Three signatures are involved, which is the part that trips people up:</p>
-
-<ol class="steps">
-  <li>a <strong>SignedKeyRequest</strong> — the requesting app saying "I asked for this key"</li>
-  <li>a <strong>KeyAdd</strong> signature from your custody address, authorizing the key, its scopes and its lifetime</li>
-  <li>the message envelope itself, signed by <em>the new key</em> — proof that whoever submits it actually holds it</li>
-</ol>
-
-<p>The key is deliberately limited:</p>
-
-<table>
-  <tr><td><strong>Scopes</strong></td><td>Only the message types the client sends. A key scoped to casting cannot follow anyone.</td></tr>
-  <tr><td><strong>TTL</strong></td><td>90 days, sliding — it refreshes on use, so abandoned keys expire by themselves.</td></tr>
-  <tr><td><strong>Nonce</strong></td><td>Strictly increasing per account, so an old authorization cannot be replayed.</td></tr>
-</table>
-
-<div class="note">
-  <p><strong>If you are writing this yourself:</strong> the gasless EIP-712 domain is
-  <code>{ name: "Farcaster KeyAdd", version: "1", chainId: 1 }</code> with no
-  <code>verifyingContract</code>. It sits beside near-identically named onchain helpers —
-  <code>signKeyRequest</code> vs <code>signGaslessKeyRequest</code> — and they are not
-  interchangeable. Using the wrong one produces a signature that verifies locally and is
-  rejected by the network.</p>
-  <p>Also: <code>deadline</code> is in <strong>Farcaster seconds</strong> (epoch
-  2021-01-01), not Unix seconds.</p>
-</div>
-
-<h3>Writes are confirmed, not assumed</h3>
-
-<p>
-  A node returns <code>200</code> once your message is well-formed and handed to the gossip
-  layer — and then discards what happens next. A node with no peers logs
-  <code>InsufficientPeers</code>, drops your cast, and still returns <code>200</code>.
-</p>
-
-<p>
-  So the client never trusts the status code. It knows the message hash before submitting,
-  and polls until the node reports it back. Blocks are about a second apart, measured at
-  the tip, so confirmation normally takes a few seconds; after 20 it reports honest failure
-  rather than claiming success.
-</p>
-
-<div class="note">
-  <p><strong>Do not post immediately after starting your node.</strong> It needs gossip
-  peers first, and until it has them your writes vanish with a <code>200</code>.</p>
-</div>
-
-<h2 id="attribution">Filtering by the client that posted</h2>
-
-<p>
-  Every cast carries the Ed25519 key that signed it. That key's registration records the
-  FID of the app that requested it, and that FID has a profile with a name:
-</p>
-
-<pre><code>cast.signer  →  the key's registration  →  requestFid  →  that app's name</code></pre>
-
-<p>
-  Posting through Warpcast means Warpcast's key signed your cast. So a feed can be filtered
-  by the software that produced it:
-</p>
-
+  <section id="attribution">
+    <p class="eyebrow">The interesting part</p>
+    <h2>Filter the feed by the client that posted.</h2>
+    <p class="narrow">
+      Every cast carries the Ed25519 key that signed it. That key's registration records
+      the FID of the app that requested it, and that FID has a profile with a name:
+    </p>
+    <pre><code>cast.signer  →  the key's registration  →  requestFid  →  that app's name</code></pre>
+    <p class="narrow">Which means a feed can be filtered by the software that produced it:</p>
 <pre><code>feed: 60 casts from 23 authors
 
    45  warpcast
@@ -386,147 +458,151 @@ shard 1   13:16 UTC</code></pre>
 
 include ["warpcast"] -&gt; 45
 exclude ["warpcast"] -&gt; 15</code></pre>
+    <p class="narrow">
+      That is a real feed on a real node, not a mockup. Some casts are legitimately
+      unattributable — keys registered before the metadata existed, or self-issued keys
+      with no app behind them. They render as <strong>unknown client</strong> and are never
+      silently dropped: a filter that hides posts because a lookup failed is a bug that
+      looks like a feature.
+    </p>
+  </section>
 
-<p>
-  That output is from a real feed on a real node. Some casts are legitimately
-  unattributable — keys registered before the metadata existed, or self-issued keys with no
-  app behind them. Those render as <strong>unknown client</strong> and are never silently
-  dropped; a filter that hides posts because a lookup failed is a bug that looks like a
-  feature.
-</p>
+  <section id="cost">
+    <p class="eyebrow">Money</p>
+    <h2>What it costs, and how to stop paying.</h2>
+    <table>
+      <thead><tr><th></th><th>AWS (default)</th><th>Hetzner</th></tr></thead>
+      <tbody>
+        <tr><td>Instance</td><td>m5.xlarge — 4 vCPU / 16 GB</td><td>cx43 — 8 vCPU / 16 GB</td></tr>
+        <tr><td>Disk</td><td>2048 GB gp3</td><td>1024 GB volume</td></tr>
+        <tr><td>Cost</td><td>~$0.42/hr — ~$10/day</td><td>~€0.14/hr — ~€3.30/day</td></tr>
+        <tr><td>New account can finish?</td><td>yes</td><td><strong>no — volume quota</strong></td></tr>
+      </tbody>
+    </table>
+    <p class="narrow">Both bill hourly. Run it for a day or two, then:</p>
+    <pre><code>./snapstart destroy</code></pre>
+    <p class="narrow">
+      It names what it is about to delete, verifies the resources are actually gone before
+      discarding local state, and keeps that state if anything survived — so you can retry
+      rather than being told you have stopped paying when you have not.
+    </p>
+  </section>
 
-<h2 id="cost">What it costs, and how to stop paying</h2>
+  <section id="trouble">
+    <p class="eyebrow">Troubleshooting</p>
+    <h2>When it goes wrong.</h2>
+    <p class="narrow">Every entry here is something we hit. Most are not documented anywhere.</p>
 
-<table>
-  <tr><th></th><th>AWS (default)</th><th>Hetzner</th></tr>
-  <tr><td>Instance</td><td>m5.xlarge — 4 vCPU / 16 GB</td><td>cx43 — 8 vCPU / 16 GB</td></tr>
-  <tr><td>Disk</td><td>2048 GB gp3</td><td>1024 GB volume</td></tr>
-  <tr><td>Cost</td><td>~$0.42/hr, ~$10/day</td><td>~€0.14/hr, ~€3.30/day</td></tr>
-  <tr><td>New account can finish?</td><td>yes</td><td><strong>no — volume quota</strong></td></tr>
-</table>
+    <details open>
+      <summary>The node serves reads but every post fails with <code>unknown fid</code></summary>
+      <div class="inner">
+        <p>A shard did not restore. <code>KEY_ADD</code> routes to shard 0 unconditionally,
+        and the block engine there needs your account's registration record — so with shard 0
+        missing, <em>every</em> write fails, for every account.</p>
+        <p>The confusing part is that everything else works, including
+        <code>/v1/validateMessage</code>, which checks structure rather than shard state.</p>
+        <p>Confirm with <code>./snapstart node ready</code>. A shard showing a delay in the
+        millions never restored and will not recover on its own — ours was closing at ~390
+        blocks/min against a 49.5 million block deficit, about 85 days. Wipe and
+        re-bootstrap inside the timing window.</p>
+      </div>
+    </details>
 
-<p>Both bill hourly. A tester runs a node for a day or two and destroys it:</p>
-
-<pre><code>./snapstart destroy</code></pre>
-
-<p>
-  It names what it is about to delete, then verifies the resources are actually gone before
-  discarding local state — and keeps that state if anything survived, so you can retry
-  rather than being told you have stopped paying when you have not.
-</p>
-
-<h2 id="trouble">When it goes wrong</h2>
-
-<p>
-  Every entry here is something we hit. Most are not in any documentation.
-</p>
-
-<h3>The node serves reads but every post fails with <code>unknown fid</code></h3>
-
-<p>
-  A shard did not restore. <code>KEY_ADD</code> routes to shard 0 unconditionally, and the
-  block engine there needs your account's registration record — so with shard 0 missing,
-  <em>every</em> write fails, for every account, including long-established ones.
-</p>
-
-<p>
-  The confusing part is that everything else works. <code>/v1/validateMessage</code> will
-  tell you the same message is valid, because it checks structure rather than shard state.
-</p>
-
-<p>
-  Confirm with <code>./snapstart node ready</code>. If a shard shows a delay in the
-  millions it never restored, and it will not recover on its own — ours was closing at
-  ~390 blocks/min against a 49.5 million block deficit, which is about 85 days. Wipe and
-  re-bootstrap inside the timing window.
-</p>
-
-<h3>The restore panicked with a 404</h3>
-
+    <details>
+      <summary>The restore panicked with a 404</summary>
+      <div class="inner">
 <pre><code>Failed to download .rocks.snapshot/shard-0/chunk_0001.bin: HTTP 404
 thread 'main' panicked at src/main.rs:422</code></pre>
+        <p>The snapshot it was downloading got replaced and deleted mid-restore. Start again
+        inside the timing window. Restarting without wiping does <em>not</em> fix it: the
+        node sees a non-empty database and skips the snapshot entirely.</p>
+      </div>
+    </details>
 
-<p>
-  The snapshot it was downloading got replaced and deleted mid-restore. Start again inside
-  the <a href="#timing">timing window</a>. Note that restarting without wiping does
-  <em>not</em> fix it: the node sees a non-empty database and skips the snapshot entirely.
-</p>
+    <details>
+      <summary><code>provision</code> fails: "not eligible for Free Tier"</summary>
+      <div class="inner"><p>Your AWS account is on the Free Plan, which refuses instance
+      types large enough to run Snapchain. Upgrade to a paid plan in Billing — credits
+      still apply.</p></div>
+    </details>
 
-<h3><code>provision</code> fails: "not eligible for Free Tier"</h3>
+    <details>
+      <summary><code>resource_limit_exceeded</code> on Hetzner</summary>
+      <div class="inner"><p>New Hetzner accounts cap volume storage at 1024&nbsp;GB, below
+      what the restore peaks at. Request an increase, or use AWS.</p></div>
+    </details>
 
-<p>
-  Your AWS account is on the Free Plan, which refuses instance types large enough to run
-  Snapchain. Upgrade to a paid plan in Billing. Credits still apply.
-</p>
+    <details>
+      <summary><code>/v1/info</code> returns nothing</summary>
+      <div class="inner"><p>Normal for the first several hours — the node does not serve
+      until the restore completes, so the obvious health check reads as "broken" for most of
+      a day. Watch <code>./snapstart node status</code> instead.</p></div>
+    </details>
 
-<h3><code>resource_limit_exceeded</code> on Hetzner</h3>
+    <details>
+      <summary>Posts return <code>200</code> but never appear</summary>
+      <div class="inner"><p>The node accepted your message and failed to gossip it — most
+      likely it has no peers yet. Wait a few minutes after startup. This is why the client
+      confirms by reading back rather than trusting the status code.</p></div>
+    </details>
 
-<p>
-  New Hetzner accounts cap volume storage at 1024&nbsp;GB, below what the restore peaks at.
-  Request an increase, or use AWS.
-</p>
+    <details>
+      <summary>Permission denied deleting node data</summary>
+      <div class="inner"><p>The container writes as root. On AWS you log in as
+      <code>ubuntu</code>, so cleanup needs <code>sudo</code>. On Hetzner you are already
+      root and never see this.</p></div>
+    </details>
+  </section>
 
-<h3><code>/v1/info</code> returns nothing</h3>
+  <section id="limits">
+    <p class="eyebrow">Honest limitations</p>
+    <h2>Worth knowing before you spend a day on this.</h2>
+    <ul class="plain narrow">
+      <li>The restore is <strong>8–12 hours</strong> and there is no resume. An interruption means starting over.</li>
+      <li>It needs <strong>2&nbsp;TB</strong> at peak for a database that settles around 557&nbsp;GB, because snapshot staging is not reclaimed until the end. <a href="https://github.com/farcasterxyz/snapchain/pull/1046">We proposed a fix.</a></li>
+      <li>Writing through someone else's validator is not an option — they require authentication. Your own read node is the only keyless write path.</li>
+      <li>This is a tutorial client, not a product. It reads a feed, posts, follows, reacts and filters by source. It is not trying to be Warpcast.</li>
+    </ul>
+  </section>
 
-<p>
-  Normal for the first several hours. The node does not serve until the restore completes,
-  so the obvious health check reads as "broken" for most of a day. Watch
-  <code>./snapstart node status</code> instead.
-</p>
-
-<h3>Posts return <code>200</code> but never appear</h3>
-
-<p>
-  The node accepted your message and failed to gossip it — most likely it has no peers yet.
-  Wait a few minutes after startup. This is why the client confirms by reading back rather
-  than trusting the status code.
-</p>
-
-<h3>Permission denied deleting node data</h3>
-
-<p>
-  The container writes as root. On AWS you log in as <code>ubuntu</code>, so cleanup needs
-  <code>sudo</code>. On Hetzner you are already root and never see this.
-</p>
-
-<hr>
-
-<h2>Honest limitations</h2>
-
-<p>
-  Things worth knowing before you spend a day on this:
-</p>
-
-<ul>
-  <li>The restore is <strong>8–12 hours</strong> and there is no resume. An interruption means starting over.</li>
-  <li>It needs <strong>2&nbsp;TB</strong> of disk at peak for a database that settles around 557&nbsp;GB, because the snapshot staging is not reclaimed until the end. <a href="https://github.com/farcasterxyz/snapchain/pull/1046">We proposed a fix</a>.</li>
-  <li>Writing through someone else's validator is not an option — they require authentication. Your own read node is the only keyless write path.</li>
-  <li>This is a tutorial client, not a product. It reads a feed, posts, follows, reacts and filters by source client. It is not trying to be Warpcast.</li>
-</ul>
-
-<h2>Corrections we filed upstream</h2>
-
-<p>
-  Where the documentation disagreed with what we measured, we reported it rather than
-  silently working around it:
-</p>
-
-<table>
-  <tr><th>Finding</th><th>Status</th></tr>
-  <tr><td>Registration costs ~$0.20, not ~$10</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1047">PR #1047</a></td></tr>
-  <tr><td>Snapshot staging is never reclaimed — 961&nbsp;GB retained</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1046">PR #1046</a></td></tr>
-  <tr><td>Grafana and statsd bind to all interfaces by default</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1048">PR #1048</a></td></tr>
-  <tr><td><code>/v1/signersByFid</code> missing from the API reference</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1049">PR #1049</a></td></tr>
-  <tr><td>A rotated snapshot breaks writes, silently</td><td><a href="https://github.com/farcasterxyz/snapchain/issues/1044">issue #1044</a></td></tr>
-</table>
-
-<hr>
-
-<p class="meta">
-  Source: <a href="https://github.com/webthethird/snapstart">github.com/webthethird/snapstart</a> — MIT.
-  Every number on this page was measured on a running node.
-</p>
+  <section id="upstream">
+    <p class="eyebrow">Giving back</p>
+    <h2>Corrections we filed upstream.</h2>
+    <p class="narrow">Where the documentation disagreed with what we measured, we reported it
+    rather than silently working around it.</p>
+    <table>
+      <thead><tr><th>Finding</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Registration costs ~$0.20, not ~$10</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1047">PR #1047</a></td></tr>
+        <tr><td>Snapshot staging never reclaimed — 961&nbsp;GB retained</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1046">PR #1046</a></td></tr>
+        <tr><td>Grafana and statsd bind to all interfaces by default</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1048">PR #1048</a></td></tr>
+        <tr><td><code>/v1/signersByFid</code> missing from the API reference</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1049">PR #1049</a></td></tr>
+        <tr><td>A rotated snapshot breaks writes, silently</td><td><a href="https://github.com/farcasterxyz/snapchain/issues/1044">issue #1044</a></td></tr>
+      </tbody>
+    </table>
+  </section>
 
 </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><a href="https://github.com/webthethird/snapstart">github.com/webthethird/snapstart</a> — MIT.
+    Every number on this page was measured on a running node.</p>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll(".copy").forEach((b) => {
+  b.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(b.dataset.copy);
+      const was = b.textContent;
+      b.textContent = "copied"; b.classList.add("done");
+      setTimeout(() => { b.textContent = was; b.classList.remove("done"); }, 1400);
+    } catch { /* clipboard blocked; the command is visible anyway */ }
+  });
+});
+</script>
 </body>
 </html>
