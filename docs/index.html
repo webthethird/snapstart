@@ -257,15 +257,29 @@ ul.plain li{margin:.35rem 0}
     <p class="eyebrow">Read this before step 1</p>
     <h2>Check the clock before you start the node.</h2>
     <p class="narrow" style="color:#c9c5c0">
-      Snapchain replaces each shard's snapshot daily and deletes the previous one.
-      A restore takes 8–12 hours, so one started at the wrong hour crosses a rotation
-      and dies — leaving a node that looks healthy and silently refuses to post.
+      Snapchain republishes each shard's snapshot daily and deletes the previous one.
+      A restore takes 8&ndash;12 hours and fetches shards <strong>one at a time</strong>,
+      so a shard whose snapshot is replaced before the restore reaches it gets
+      <code>404</code> on every chunk. Do not trust the times below &mdash; read the
+      manifest yourself, because they drift.
     </p>
     <div class="grid g3" style="margin-top:1.8rem">
-      <div class="card"><div class="k">Start between</div><div class="v">05:20–21:00<small> UTC</small></div><p>Outside this window the restore crosses a snapshot rotation.</p></div>
-      <div class="card"><div class="k">Rotation times</div><div class="v mono" style="font-size:1rem">shard 0 — 05:18<br>shard 2 — 08:03<br>shard 1 — 13:16</div><p>All UTC. Each shard rotates independently.</p></div>
-      <div class="card"><div class="k">If it fails</div><div class="v">Silently</div><p>Reads keep working. Every write is rejected. Nothing logs it.</p></div>
+      <div class="card"><div class="k">Start after</div><div class="v">05:20<small> UTC</small></div><p>Just past the earliest rotation buys a full day of headroom before any shard is replaced.</p></div>
+      <div class="card"><div class="k">Roughly, in UTC</div><div class="v mono" style="font-size:1rem">shard 0 &mdash; 05:18<br>shard 2 &mdash; 08:04<br>shard 1 &mdash; 13:29</div><p>Measured 17&ndash;19 Oct 2026. Shard 0 held to &plusmn;7s over three days; shard 1 slid 6 minutes later over two.</p></div>
+      <div class="card"><div class="k">If it fails</div><div class="v">Loudly, then not at all</div><p>The 404s are logged and the restore dies. A half-restored node still serves reads and rejects every write.</p></div>
     </div>
+    <p class="narrow" style="color:#c9c5c0;margin-top:1.8rem">
+      Each shard publishes a manifest whose <code>timestamp</code> field is the moment
+      that snapshot was written. That is the authoritative answer, and it costs three
+      requests:
+    </p>
+<pre><code>R2=https://pub-d352dd8819104a778e20d08888c5a661.r2.dev/FARCASTER_NETWORK_MAINNET
+for s in 0 1 2; do
+  curl -s "$R2/$s/latest.json" | python3 -c "
+import sys, json, datetime as d
+t = json.load(sys.stdin)['timestamp'] / 1000
+print('shard $s', d.datetime.fromtimestamp(t, d.timezone.utc))"
+done</code></pre>
   </div>
 </section>
 
