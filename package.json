@@ -12,7 +12,8 @@
     "price": "tsx --env-file-if-exists=.env scripts/price.ts",
     "register": "tsx --env-file-if-exists=.env scripts/register-fid.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsc --noEmit && tsx scripts/test-app-key.ts && tsx scripts/test-attribution.ts"
+    "test": "tsc --noEmit && tsx scripts/test-app-key.ts && tsx scripts/test-attribution.ts",
+    "ui": "tsx --env-file-if-exists=.env scripts/serve.ts"
   },
   "dependencies": {
     "@farcaster/core": "^0.20.0",

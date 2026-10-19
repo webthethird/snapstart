@@ -1,0 +1,82 @@
+:root {
+  --bg: #fbfaf8; --panel: #fff; --fg: #1a1a1a; --muted: #6b6762; --rule: #e4e0da;
+  --accent: #6b4de6; --accent-soft: #efeaff; --chip: #f1eef9;
+  --ok: #3f8f4d; --warn: #b8862c; --bad: #b4453a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131312; --panel: #1b1a19; --fg: #e9e7e4; --muted: #99948e; --rule: #2d2b29;
+    --accent: #a991ff; --accent-soft: #241f36; --chip: #262233;
+    --ok: #5aa869; --warn: #c8963a; --bad: #d06055;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+button, input, textarea { font: inherit; color: inherit; }
+
+/* Three columns on desktop, one on a phone. The source filter moves to the top
+   on narrow screens because it is the feature worth discovering. */
+.app { display: grid; grid-template-columns: 1fr; max-width: 1100px; margin: 0 auto; }
+@media (min-width: 900px) {
+  .app { grid-template-columns: 1fr 19rem; gap: 1.5rem; padding: 0 1rem; }
+  .sidebar { order: 2; }
+  .main { order: 1; }
+}
+
+header.bar {
+  display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+  padding: .85rem 1rem; border-bottom: 1px solid var(--rule);
+  position: sticky; top: 0; background: var(--bg); z-index: 10;
+}
+.brand { font-weight: 700; letter-spacing: -.02em; }
+.status { font-size: .8rem; color: var(--muted); display: flex; align-items: center; gap: .4rem; }
+.dot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.spacer { flex: 1; }
+
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 1rem; margin: 1rem; }
+@media (min-width: 900px) { .panel { margin: 1rem 0; } }
+
+textarea#composeText {
+  width: 100%; min-height: 4.5rem; resize: vertical; padding: .6rem .7rem;
+  background: var(--bg); border: 1px solid var(--rule); border-radius: 8px;
+}
+.row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; }
+button {
+  background: var(--accent); color: #fff; border: 0; border-radius: 7px;
+  padding: .5rem .9rem; cursor: pointer; font-weight: 600;
+}
+button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--rule); font-weight: 500; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+.cast { padding: .9rem 0; border-bottom: 1px solid var(--rule); }
+.cast:last-child { border-bottom: 0; }
+.cast-head { display: flex; align-items: baseline; gap: .45rem; flex-wrap: wrap; font-size: .88rem; }
+.cast-author { font-weight: 650; }
+.cast-meta { color: var(--muted); }
+.cast-text { margin: .35rem 0 .5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chip {
+  font-size: .72rem; padding: .1rem .45rem; border-radius: 99px;
+  background: var(--chip); color: var(--muted); white-space: nowrap;
+}
+.chip.self { background: var(--accent-soft); color: var(--accent); }
+.actions { display: flex; gap: .4rem; }
+.actions button { background: transparent; color: var(--muted); border: 1px solid var(--rule); padding: .22rem .55rem; font-size: .8rem; font-weight: 500; }
+.actions button.done { color: var(--accent); border-color: var(--accent); }
+
+.filter-item { display: flex; align-items: center; gap: .5rem; padding: .32rem 0; font-size: .9rem; }
+.filter-item input { accent-color: var(--accent); }
+.filter-item .count { margin-left: auto; color: var(--muted); font-size: .82rem; }
+h2.sec { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 .6rem; }
+.hint { color: var(--muted); font-size: .84rem; }
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 1.2rem;
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+  padding: .6rem 1rem; font-size: .88rem; box-shadow: 0 6px 24px rgba(0,0,0,.18);
+  max-width: 90vw;
+}
+.toast.bad { border-color: var(--bad); color: var(--bad); }

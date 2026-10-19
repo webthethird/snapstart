@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>snapstart client</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="bar">
+  <span class="brand">snapstart</span>
+  <span class="status"><span class="dot" id="dot"></span><span id="statusText">checking node…</span></span>
+  <span class="spacer"></span>
+  <button class="ghost" id="refresh">Refresh</button>
+</header>
+
+<div class="app">
+  <main class="main">
+    <section class="panel" id="composePanel">
+      <h2 class="sec">New cast</h2>
+      <textarea id="composeText" placeholder="Say something. It will be signed by your app key and submitted through your own node." maxlength="320"></textarea>
+      <div class="row end" style="margin-top:.6rem">
+        <span class="hint" id="composeCount">0 / 320</span>
+        <button id="castBtn">Cast</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="sec">Home</h2>
+      <div id="feed"><p class="hint">Loading feed from your node…</p></div>
+    </section>
+  </main>
+
+  <aside class="sidebar">
+    <section class="panel">
+      <h2 class="sec">Cast sources</h2>
+      <p class="hint" style="margin-top:0">
+        Every cast is signed by an app key. The key records which app requested it,
+        so the feed can be filtered by the software that posted.
+      </p>
+      <div id="filters"></div>
+      <div class="row" style="margin-top:.7rem">
+        <button class="ghost" id="allOn">All</button>
+        <button class="ghost" id="allOff">None</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="sec">Follow an FID</h2>
+      <div class="row">
+        <input id="followFid" inputmode="numeric" placeholder="e.g. 3" style="flex:1;min-width:0;padding:.45rem .6rem;background:var(--bg);border:1px solid var(--rule);border-radius:7px">
+        <button id="followBtn">Follow</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="sec">Node</h2>
+      <div class="hint" id="nodeDetail">—</div>
+    </section>
+  </aside>
+</div>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>
