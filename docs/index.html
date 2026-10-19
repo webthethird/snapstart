@@ -398,7 +398,117 @@ exclude ["warpcast"] -&gt; 15</code></pre>
   rather than being told you have stopped paying when you have not.
 </p>
 
-<p class="meta">Troubleshooting section in progress. Step 2 is implemented but not yet verified end to end against a live node — this page will say so plainly until it is.</p>
+<h2 id="trouble">When it goes wrong</h2>
+
+<p>
+  Every entry here is something we hit. Most are not in any documentation.
+</p>
+
+<h3>The node serves reads but every post fails with <code>unknown fid</code></h3>
+
+<p>
+  A shard did not restore. <code>KEY_ADD</code> routes to shard 0 unconditionally, and the
+  block engine there needs your account's registration record — so with shard 0 missing,
+  <em>every</em> write fails, for every account, including long-established ones.
+</p>
+
+<p>
+  The confusing part is that everything else works. <code>/v1/validateMessage</code> will
+  tell you the same message is valid, because it checks structure rather than shard state.
+</p>
+
+<p>
+  Confirm with <code>./snapstart node ready</code>. If a shard shows a delay in the
+  millions it never restored, and it will not recover on its own — ours was closing at
+  ~390 blocks/min against a 49.5 million block deficit, which is about 85 days. Wipe and
+  re-bootstrap inside the timing window.
+</p>
+
+<h3>The restore panicked with a 404</h3>
+
+<pre><code>Failed to download .rocks.snapshot/shard-0/chunk_0001.bin: HTTP 404
+thread 'main' panicked at src/main.rs:422</code></pre>
+
+<p>
+  The snapshot it was downloading got replaced and deleted mid-restore. Start again inside
+  the <a href="#timing">timing window</a>. Note that restarting without wiping does
+  <em>not</em> fix it: the node sees a non-empty database and skips the snapshot entirely.
+</p>
+
+<h3><code>provision</code> fails: "not eligible for Free Tier"</h3>
+
+<p>
+  Your AWS account is on the Free Plan, which refuses instance types large enough to run
+  Snapchain. Upgrade to a paid plan in Billing. Credits still apply.
+</p>
+
+<h3><code>resource_limit_exceeded</code> on Hetzner</h3>
+
+<p>
+  New Hetzner accounts cap volume storage at 1024&nbsp;GB, below what the restore peaks at.
+  Request an increase, or use AWS.
+</p>
+
+<h3><code>/v1/info</code> returns nothing</h3>
+
+<p>
+  Normal for the first several hours. The node does not serve until the restore completes,
+  so the obvious health check reads as "broken" for most of a day. Watch
+  <code>./snapstart node status</code> instead.
+</p>
+
+<h3>Posts return <code>200</code> but never appear</h3>
+
+<p>
+  The node accepted your message and failed to gossip it — most likely it has no peers yet.
+  Wait a few minutes after startup. This is why the client confirms by reading back rather
+  than trusting the status code.
+</p>
+
+<h3>Permission denied deleting node data</h3>
+
+<p>
+  The container writes as root. On AWS you log in as <code>ubuntu</code>, so cleanup needs
+  <code>sudo</code>. On Hetzner you are already root and never see this.
+</p>
+
+<hr>
+
+<h2>Honest limitations</h2>
+
+<p>
+  Things worth knowing before you spend a day on this:
+</p>
+
+<ul>
+  <li>The restore is <strong>8–12 hours</strong> and there is no resume. An interruption means starting over.</li>
+  <li>It needs <strong>2&nbsp;TB</strong> of disk at peak for a database that settles around 557&nbsp;GB, because the snapshot staging is not reclaimed until the end. <a href="https://github.com/farcasterxyz/snapchain/pull/1046">We proposed a fix</a>.</li>
+  <li>Writing through someone else's validator is not an option — they require authentication. Your own read node is the only keyless write path.</li>
+  <li>This is a tutorial client, not a product. It reads a feed, posts, follows, reacts and filters by source client. It is not trying to be Warpcast.</li>
+</ul>
+
+<h2>Corrections we filed upstream</h2>
+
+<p>
+  Where the documentation disagreed with what we measured, we reported it rather than
+  silently working around it:
+</p>
+
+<table>
+  <tr><th>Finding</th><th>Status</th></tr>
+  <tr><td>Registration costs ~$0.20, not ~$10</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1047">PR #1047</a></td></tr>
+  <tr><td>Snapshot staging is never reclaimed — 961&nbsp;GB retained</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1046">PR #1046</a></td></tr>
+  <tr><td>Grafana and statsd bind to all interfaces by default</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1048">PR #1048</a></td></tr>
+  <tr><td><code>/v1/signersByFid</code> missing from the API reference</td><td><a href="https://github.com/farcasterxyz/snapchain/pull/1049">PR #1049</a></td></tr>
+  <tr><td>A rotated snapshot breaks writes, silently</td><td><a href="https://github.com/farcasterxyz/snapchain/issues/1044">issue #1044</a></td></tr>
+</table>
+
+<hr>
+
+<p class="meta">
+  Source: <a href="https://github.com/webthethird/snapstart">github.com/webthethird/snapstart</a> — MIT.
+  Every number on this page was measured on a running node.
+</p>
 
 </div>
 </body>
