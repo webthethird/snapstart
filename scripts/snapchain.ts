@@ -144,9 +144,9 @@ export class Snapchain {
   /**
    * Casts authored by one FID, newest first by default.
    *
-   * `reverse` must be the string "true"/"false". The published HTTP API
-   * reference says to set it to 1, which the node rejects with
-   * "provided string was not `true` or `false`".
+   * `reverse` must be "true"/"false" — passing 1 is rejected with
+   * "provided string was not `true` or `false`". The docs say this correctly;
+   * an earlier version of this file did not.
    */
   castsByFid(fid: number, opts: { pageSize?: number; pageToken?: string; reverse?: boolean } = {}) {
     return this.get<Paged<Message>>("/v1/castsByFid", {
