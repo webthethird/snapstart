@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>snapstart — run your own Farcaster read node and client</title>
+<meta name="description" content="Run a Snapchain read node and a Farcaster client that reads from it, in three commands. No API keys.">
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1a1a1a; --muted: #5c5c5c; --rule: #e2ded8;
+    --code-bg: #f3f0ec; --accent: #6b4de6; --warn-bg: #fff6e5; --warn-br: #e0a53a;
+    --ok-bg: #eef7ee; --ok-br: #4a9a55;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141414; --fg: #e8e6e3; --muted: #9a9693; --rule: #2e2c2a;
+      --code-bg: #1e1d1c; --accent: #a991ff; --warn-bg: #2b2317; --warn-br: #b8862c;
+      --ok-bg: #16231a; --ok-br: #4a9a55;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 17px/1.65 ui-serif, Georgia, "Times New Roman", serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 6rem; }
+  h1 { font-size: 2.1rem; line-height: 1.15; margin: 0 0 .4rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.45rem; margin: 3rem 0 .75rem; letter-spacing: -.01em; }
+  h3 { font-size: 1.1rem; margin: 2rem 0 .5rem; }
+  .lede { color: var(--muted); font-size: 1.1rem; margin: 0 0 2rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: .12em .35em; border-radius: 3px; font-size: .88em; }
+  pre {
+    background: var(--code-bg); padding: 1rem 1.1rem; border-radius: 6px;
+    overflow-x: auto; font-size: .85rem; line-height: 1.55; margin: 1rem 0;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  a { color: var(--accent); }
+  .note, .warn {
+    border-left: 3px solid var(--ok-br); background: var(--ok-bg);
+    padding: .85rem 1rem; border-radius: 0 5px 5px 0; margin: 1.25rem 0; font-size: .95rem;
+  }
+  .warn { border-left-color: var(--warn-br); background: var(--warn-bg); }
+  .note p:first-child, .warn p:first-child { margin-top: 0; }
+  .note p:last-child, .warn p:last-child { margin-bottom: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1.25rem 0; font-size: .92rem; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--rule); }
+  th { font-weight: 600; }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 3rem 0; }
+  .meta { color: var(--muted); font-size: .9rem; }
+  ol.steps { padding-left: 1.2rem; }
+  ol.steps > li { margin: .4rem 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Run your own Farcaster client</h1>
+<p class="lede">
+  A Snapchain read node you own, and a client that reads from it — in three commands.
+  No API keys, no hosted data provider, nobody's rate limit.
+</p>
+
+<h2>Quickstart</h2>
+
+<pre><code>git clone https://github.com/webthethird/snapstart &amp;&amp; cd snapstart
+
+./snapstart provision      # 0. furnish the compute
+./snapstart node up        # 1. start a Snapchain read node
+./snapstart client create  # 2. issue an app key and launch the client</code></pre>
+
+<p>
+  That is the whole thing. The rest of this page explains what each command does, what
+  the protocol is doing underneath, and the ways it can go wrong — all of which we hit
+  while building it.
+</p>
+
+<div class="warn">
+  <p><strong>Before you start the node, check the clock.</strong> Step 1 takes
+  8–12 hours, and Snapchain replaces its snapshots daily while deleting the previous
+  ones. A restore that runs past a rotation fails — and fails in a way that leaves you
+  with a node that looks healthy and silently refuses to post.</p>
+  <p>Start step 1 between <strong>05:20 and 21:00 UTC</strong>. See
+  <a href="#timing">Timing</a> for why.</p>
+</div>
+
+<h2>What you need first</h2>
+
+<table>
+  <tr><th>Thing</th><th>Why</th><th>Cost</th></tr>
+  <tr><td>A Farcaster account with storage</td><td>The client posts as you</td><td>~$0.20 if you register one</td></tr>
+  <tr><td>Its seed phrase</td><td>To authorize an app key, once</td><td>—</td></tr>
+  <tr><td>An AWS or Hetzner account</td><td>To run the node</td><td>~$10/day, destroy when done</td></tr>
+</table>
+
+<p class="meta">
+  Every figure on this page was measured on a running node, not taken from
+  documentation. Where our numbers disagree with the official docs, we have said so and
+  filed the correction upstream.
+</p>
+
+<hr>
+
+<p class="meta">This page is a work in progress — the tutorial sections are being written.</p>
+
+</div>
+</body>
+</html>
