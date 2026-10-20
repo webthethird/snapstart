@@ -245,7 +245,7 @@ ul.plain li{margin:.35rem 0}
 
     <div class="grid g4" style="margin-top:2rem">
       <div class="card"><div class="k">Cost</div><div class="v">~$10<small>/day</small></div><p>Hourly billing. Destroy it when you're done.</p></div>
-      <div class="card"><div class="k">First sync</div><div class="v">8–12<small> hours</small></div><p>Docs say two. We measured otherwise, twice.</p></div>
+      <div class="card"><div class="k">First sync</div><div class="v">~13<small> hours</small></div><p>Docs say two. One full restore, timed end to end: 13h&thinsp;22m.</p></div>
       <div class="card"><div class="k">API keys</div><div class="v">Zero</div><p>The node holds no credentials once running.</p></div>
       <div class="card"><div class="k">Licence</div><div class="v">MIT</div><p>Every number here measured on a live node.</p></div>
     </div>
@@ -255,35 +255,70 @@ ul.plain li{margin:.35rem 0}
 <section class="band">
   <div class="wrap">
     <p class="eyebrow">Read this before step 1</p>
-    <h2>Start after 13:35&nbsp;UTC, not before.</h2>
+    <h2>The restore can lose a race with the snapshot it is reading.</h2>
     <p class="narrow" style="color:#c9c5c0">
-      Snapchain republishes each shard's snapshot daily and deletes the previous one.
-      Your node reads all three manifests when it starts, then restores shards
-      <strong>one at a time</strong> &mdash; so every shard inherits a deadline: the next
-      time <em>its own</em> snapshot rotates. Miss it and every remaining chunk returns
-      <code>404</code>.
-    </p>
-    <p class="narrow" style="color:#c9c5c0">
-      The intuitive move is to start just after the first rotation of the day. That is
-      the worst choice available. It gives shard&nbsp;2 a 2.7&nbsp;hour deadline against
-      a restore that takes 10&ndash;15&nbsp;hours.
+      Your node fetches all three shard manifests when it starts, then restores
+      shards <strong>one at a time</strong>, and shard&nbsp;0 is always last
+      (<code>shard_ids.push(0)</code>, <code>src/main.rs:413</code>). Snapshots are
+      replaced daily and the previous one is eventually deleted. A restore slower
+      than that gap reaches shard&nbsp;0 holding a pointer to something that no
+      longer exists.
     </p>
     <div class="grid g3" style="margin-top:1.8rem">
-      <div class="card"><div class="k">Start after</div><div class="v">13:35<small> UTC</small></div><p>Just past the last of the three rotations. Leaves 15.7h before the tightest deadline.</p></div>
-      <div class="card"><div class="k">Rotations, roughly</div><div class="v mono" style="font-size:1rem">shard 0 &mdash; 05:18<br>shard 2 &mdash; 08:04<br>shard 1 &mdash; 13:29</div><p>Measured 17&ndash;19 Oct 2026. Shard 0 held to &plusmn;7s over three days; shard 1 slid 6 minutes later over two.</p></div>
-      <div class="card"><div class="k">Restore takes</div><div class="v">10&ndash;15<small> hours</small></div><p>Per shard: download, unzip, then unpack the tar into RocksDB. Measured on an m5.xlarge with gp3.</p></div>
+      <div class="card"><div class="k">Restore takes</div><div class="v">10&ndash;15<small> hours</small></div><p>5,692 chunks. Measured on an m5.xlarge with gp3: download 9&ndash;19 chunks/min, unzip 1.45&thinsp;s/chunk, unpack 62&thinsp;MB/s.</p></div>
+      <div class="card"><div class="k">At risk</div><div class="v">shard 0</div><p>Restored last, so it has waited the longest. It is also the smallest &mdash; 371 chunks, about 30&thinsp;GB.</p></div>
+      <div class="card"><div class="k">Failure signature</div><div class="v mono" style="font-size:.95rem">404, then panic</div><p>Repeated <code>Failed to download</code>, then a panic at <code>src/main.rs:422:22</code>.</p></div>
     </div>
-    <p class="narrow" style="color:#c9c5c0;margin-top:1.8rem">
-      Starting just after the <em>latest</em> rotation is what maximises the tightest
-      deadline you face. The other two starts look safe and are not:
-    </p>
-<pre><code>start just after   shard 0   shard 2   shard 1   tightest
-05:24                23.9h      2.7h      8.1h       2.7h   x
-08:10                21.1h     23.9h      5.3h       5.3h   x
-13:35                15.7h     18.5h     23.9h      15.7h   ok</code></pre>
+
+    <h3 style="color:#fff;margin-top:2.4rem">What we measured, and what we did not</h3>
     <p class="narrow" style="color:#c9c5c0">
-      Those times drift, so confirm the new snapshot has actually published before you
-      start rather than trusting the clock:
+      We hit this twice while building, so the hazard is real. But we never pinned
+      down the one number that would let us hand you a safe start time, and we would
+      rather say so than publish a window that only looks authoritative. An earlier
+      draft of this page did exactly that; shard&nbsp;2 then moved two hours in a day
+      and broke it.
+    </p>
+<pre><code>Generation time, from each snapshot's own timestamp
+  shard 0   10-17 05:18:45  10-18 05:18:46  10-19 05:18:52  10-20 05:18:49
+            steady to within 7 seconds across four days
+  shard 1   10-17 13:23:10  10-19 13:29:15
+            +6m05s over two days
+  shard 2   10-17 08:04:08  10-19 08:04:38  10-20 10:04:58
+            +30s over two days, then +2 HOURS in one
+
+latest.json is updated LATER than that timestamp
+  10-20 06:51  still served the 10-19 shard-0 key
+  10-20 07:45  first served the 10-20 key, generated 05:18:49
+
+The old snapshot is deleted -- but we never caught WHEN
+  10-20 06:38  node downloaded all 371 shard-0 chunks from the 10-19
+               snapshot successfully, hours after it was "rotated"
+  10-20 11:48  those same chunks return 404
+  10-18 13:38  404s on the 10-17 snapshot, then the panic</code></pre>
+    <p class="narrow" style="color:#c9c5c0">
+      Deletion is the event that actually matters, and it is the one we did not
+      characterise. So treat any start-time rule &mdash; including one you might
+      derive from the table above &mdash; as a guess. Our own node was saved by
+      winning this race, not by planning for it.
+    </p>
+
+    <h3 style="color:#fff;margin-top:2.4rem">What to do instead</h3>
+    <p class="narrow" style="color:#c9c5c0">
+      Recovery is cheap, which is the useful part. A missing shard can be reloaded
+      on its own &mdash; shard&nbsp;0 is 30&thinsp;GB and takes minutes, against
+      10&ndash;15 hours to redo the whole restore. Fetch the shard's
+      <em>current</em> manifest, download its chunks, verify them, and untar into
+      <code>.rocks</code> while the node is stopped. The technique is from
+      <a href="https://github.com/Sats100M/farcaster-in-3/blob/main/scripts/reload-shard.sh" style="color:#a991ff">reload-shard.sh</a>
+      by Sats100M (MIT), linked from
+      <a href="https://github.com/farcasterxyz/snapchain/issues/1044" style="color:#a991ff">snapchain#1044</a>.
+      <a href="https://github.com/farcasterxyz/snapchain/pull/1045" style="color:#a991ff">PR&nbsp;#1045</a>
+      fixes the root cause upstream by refetching each shard's metadata immediately
+      before downloading it.
+    </p>
+    <p class="narrow" style="color:#c9c5c0">
+      Whatever you do, check the manifests yourself rather than trusting times on a
+      web page &mdash; including this one:
     </p>
 <pre><code>R2=https://pub-d352dd8819104a778e20d08888c5a661.r2.dev/FARCASTER_NETWORK_MAINNET
 for s in 0 1 2; do
@@ -293,9 +328,8 @@ t = json.load(sys.stdin)['timestamp'] / 1000
 print('shard $s', d.datetime.fromtimestamp(t, d.timezone.utc))"
 done</code></pre>
     <p class="narrow" style="color:#c9c5c0">
-      A restore that loses this race fails loudly &mdash; repeated 404s, then a panic.
-      What is quiet is the aftermath: a half-restored node still answers reads, so it
-      looks healthy while rejecting every write.
+      A node that loses this race fails loudly. What is quiet is the aftermath: it
+      still answers reads, so it looks healthy while rejecting every write.
     </p>
   </div>
 </section>
@@ -490,11 +524,27 @@ done</code></pre>
 include ["warpcast"] -&gt; 45
 exclude ["warpcast"] -&gt; 15</code></pre>
     <p class="narrow">
-      That is a real feed on a real node, not a mockup. Some casts are legitimately
-      unattributable — keys registered before the metadata existed, or self-issued keys
-      with no app behind them. They render as <strong>unknown client</strong> and are never
-      silently dropped: a filter that hides posts because a lookup failed is a bug that
-      looks like a feature.
+      That is a real feed on a real node, not a mockup. Casts that genuinely cannot be
+      attributed — keys registered before the metadata existed — render as
+      <strong>unknown client</strong> and are never silently dropped: a filter that hides
+      posts because a lookup failed is a bug that looks like a feature.
+    </p>
+
+    <h3>The same field, two encodings</h3>
+    <p class="narrow">
+      <code>requestFid</code> is reported two different ways depending on how the key was
+      registered, which is easy to miss because the obvious one works:
+    </p>
+<pre><code>onchain   signer.onChainEvent.signerEventBody.metadata
+          base64, ABI-encoded SignedKeyRequestMetadata, decode to get requestFid
+
+gasless   signer.requestFid
+          a plain top-level field. `metadata` is absent entirely.</code></pre>
+    <p class="narrow">
+      We shipped the bug this creates: decoding only the blob sends every gasless key to
+      <strong>unknown client</strong>, including the one your own client just issued itself.
+      Nothing errors. The feature simply fails to recognise your own posts, which is exactly
+      the case you are least likely to test. Check both.
     </p>
   </section>
 
@@ -564,6 +614,14 @@ thread 'main' panicked at src/main.rs:422</code></pre>
     </details>
 
     <details>
+      <summary><code>reactionsByCast</code> returns 400 for a type the API itself reports</summary>
+      <div class="inner"><p>Message bodies report <code>REACTION_TYPE_LIKE</code>, but the query
+      parameter wants <code>Like</code>. Feeding back the value you just read gets you
+      <code>unknown variant `REACTION_TYPE_LIKE`, expected one of `None`, `Like`, `Recast`</code>.
+      Same for <code>Recast</code>.</p></div>
+    </details>
+
+    <details>
       <summary><code>/v1/info</code> returns nothing</summary>
       <div class="inner"><p>Normal for the first several hours — the node does not serve
       until the restore completes, so the obvious health check reads as "broken" for most of
@@ -589,7 +647,7 @@ thread 'main' panicked at src/main.rs:422</code></pre>
     <p class="eyebrow">Honest limitations</p>
     <h2>Worth knowing before you spend a day on this.</h2>
     <ul class="plain narrow">
-      <li>The restore is <strong>8–12 hours</strong> and there is no resume. An interruption means starting over.</li>
+      <li>The restore took <strong>13h&thinsp;22m</strong> on our node, and interruption is worse than it sounds. A restart does not resume a shard whose snapshot download failed &mdash; it sees a non-empty <code>.rocks</code>, skips the snapshot, and starts syncing that shard from genesis, which takes weeks. You have to reload that shard deliberately. <a href="https://github.com/farcasterxyz/snapchain/issues/1044">snapchain#1044</a>.</li>
       <li>It needs <strong>2&nbsp;TB</strong> at peak for a database that settles around 557&nbsp;GB, because snapshot staging is not reclaimed until the end. <a href="https://github.com/farcasterxyz/snapchain/pull/1046">We proposed a fix.</a></li>
       <li>Writing through someone else's validator is not an option — they require authentication. Your own read node is the only keyless write path.</li>
       <li>This is a tutorial client, not a product. It reads a feed, posts, follows, reacts and filters by source. It is not trying to be Warpcast.</li>
