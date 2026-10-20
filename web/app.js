@@ -99,37 +99,76 @@ function renderFeed() {
   }
   box.innerHTML = "";
   for (const c of visible) {
-    const el = document.createElement("article");
-    el.className = "cast";
+    box.append(c.replyTo ? threadEl(c) : castEl(c, { actions: true }));
+  }
+}
 
-    const head = document.createElement("div");
-    head.className = "cast-head";
-    const who = document.createElement("span");
-    who.className = "cast-author";
-    who.textContent = c.displayName || c.author;
-    const meta = document.createElement("span");
-    meta.className = "cast-meta";
-    meta.textContent = `@${c.author} · ${relative(c.timestamp)}`;
-    const chip = document.createElement("span");
-    chip.className = `chip${c.client.source === "self" ? " self" : ""}`;
-    chip.textContent = clientLabel(c.client);
-    chip.title = `source: ${c.client.source}`;
-    head.append(who, meta, chip);
+/**
+ * A reply shown under the cast it answers.
+ *
+ * Snapchain has no thread object — a reply is just a cast carrying parentCastId,
+ * and the client reconstructs the pair. The parent is rendered muted and without
+ * action buttons, so it reads as context rather than as a second feed item.
+ */
+function threadEl(c) {
+  const wrap = document.createElement("div");
+  wrap.className = "thread";
 
-    const text = document.createElement("p");
-    text.className = "cast-text";
-    text.textContent = c.text;           // textContent, never innerHTML
+  if (c.replyTo.missing) {
+    const gone = document.createElement("div");
+    gone.className = "cast parent gone";
+    gone.textContent = `Replying to a cast that is no longer on this node (fid ${c.replyTo.fid})`;
+    wrap.append(gone);
+  } else {
+    wrap.append(castEl(c.replyTo, { actions: false, parent: true }));
+  }
 
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    actions.append(
+  wrap.append(castEl(c, { actions: true, reply: true }));
+  return wrap;
+}
+
+function castEl(c, { actions = true, parent = false, reply = false } = {}) {
+  const el = document.createElement("article");
+  el.className = `cast${parent ? " parent" : ""}${reply ? " reply" : ""}`;
+
+  const head = document.createElement("div");
+  head.className = "cast-head";
+  const who = document.createElement("span");
+  who.className = "cast-author";
+  who.textContent = c.displayName || c.author;
+  const meta = document.createElement("span");
+  meta.className = "cast-meta";
+  meta.textContent = `@${c.author} · ${relative(c.timestamp)}`;
+  const chip = document.createElement("span");
+  chip.className = `chip${c.client.source === "self" ? " self" : ""}`;
+  chip.textContent = clientLabel(c.client);
+  chip.title = `source: ${c.client.source}`;
+  head.append(who, meta, chip);
+  el.append(head);
+
+  if (c.parentUrl && !parent) {
+    // A reply addressed to a channel rather than to a cast.
+    const ch = document.createElement("p");
+    ch.className = "cast-channel";
+    ch.textContent = `in ${c.parentUrl}`;
+    el.append(ch);
+  }
+
+  const text = document.createElement("p");
+  text.className = "cast-text";
+  text.textContent = c.text;           // textContent, never innerHTML
+  el.append(text);
+
+  if (actions) {
+    const bar = document.createElement("div");
+    bar.className = "actions";
+    bar.append(
       actionButton("♡ like", () => react(c, "like")),
       actionButton("↻ recast", () => react(c, "recast")),
     );
-
-    el.append(head, text, actions);
-    box.append(el);
+    el.append(bar);
   }
+  return el;
 }
 
 function actionButton(label, fn) {

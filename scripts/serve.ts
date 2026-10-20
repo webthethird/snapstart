@@ -97,23 +97,75 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     const feed = await getHomeFeed(node, fid, { limit, perAuthor: 4 });
     const attributed = await attribute(node, feed, resolver);
 
-    const authors = [...new Set(attributed.map((c) => c.data.fid))];
+    // A reply is just a cast with parentCastId set. Snapchain stores no thread
+    // structure — the client reconstructs it by fetching each parent. Replies to
+    // a channel carry parentUrl instead and have no parent cast to fetch.
+    const parentRefs = new Map<string, { fid: number; hash: string }>();
+    for (const c of attributed) {
+      const p = c.data.castAddBody?.parentCastId;
+      if (p) parentRefs.set(`${p.fid}:${p.hash}`, p);
+    }
+
+    // The parent may be unreachable: deleted by its author, or pruned once the
+    // account ran out of storage. That is normal, not an error — show the reply
+    // with a stub rather than dropping it.
+    const parents = new Map<string, Awaited<ReturnType<typeof node.castById>> | null>();
+    await Promise.all(
+      [...parentRefs].map(async ([key, ref]) => {
+        try {
+          parents.set(key, await node.castById(ref.fid, ref.hash));
+        } catch {
+          parents.set(key, null);
+        }
+      }),
+    );
+
+    const fetchedParents = [...parents.values()].filter((m) => m !== null);
+    const attributedParents = await attribute(node, fetchedParents, resolver);
+    const parentByKey = new Map(
+      attributedParents.map((m) => [`${m.data.fid}:${m.hash}`, m]),
+    );
+
+    const authors = [
+      ...new Set([
+        ...attributed.map((c) => c.data.fid),
+        ...attributedParents.map((c) => c.data.fid),
+      ]),
+    ];
     const profiles = new Map<number, Awaited<ReturnType<typeof getProfile>>>();
     await Promise.all(
       authors.map(async (a) => profiles.set(a, await getProfile(node, a))),
     );
 
+    const shape = (c: (typeof attributed)[number]) => ({
+      hash: c.hash,
+      fid: c.data.fid,
+      author: profiles.get(c.data.fid)?.username ?? `fid:${c.data.fid}`,
+      displayName: profiles.get(c.data.fid)?.displayName ?? null,
+      pfp: profiles.get(c.data.fid)?.pfpUrl ?? null,
+      text: c.data.castAddBody?.text ?? "",
+      timestamp: toDate(c.data.timestamp).toISOString(),
+      client: c.client,
+    });
+
     return send(res, 200, {
-      casts: attributed.map((c) => ({
-        hash: c.hash,
-        fid: c.data.fid,
-        author: profiles.get(c.data.fid)?.username ?? `fid:${c.data.fid}`,
-        displayName: profiles.get(c.data.fid)?.displayName ?? null,
-        pfp: profiles.get(c.data.fid)?.pfpUrl ?? null,
-        text: c.data.castAddBody?.text ?? "",
-        timestamp: toDate(c.data.timestamp).toISOString(),
-        client: c.client,
-      })),
+      casts: attributed.map((c) => {
+        const ref = c.data.castAddBody?.parentCastId;
+        const key = ref ? `${ref.fid}:${ref.hash}` : undefined;
+        const parent = key ? parentByKey.get(key) : undefined;
+        return {
+          ...shape(c),
+          // Present only on replies. `parent` is null when the parent could not
+          // be fetched, so the UI can say so instead of pretending it is a root.
+          replyTo: ref
+            ? parent
+              ? shape(parent)
+              : { missing: true, fid: ref.fid, hash: ref.hash }
+            : null,
+          // Channel replies have a parentUrl and no parent cast.
+          parentUrl: c.data.castAddBody?.parentUrl ?? null,
+        };
+      }),
       breakdown: [...clientBreakdown(attributed)].map(([name, count]) => ({ name, count })),
     });
   }

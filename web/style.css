@@ -54,6 +54,29 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
 button:disabled { opacity: .45; cursor: not-allowed; }
 
 .cast { padding: .9rem 0; border-bottom: 1px solid var(--rule); }
+
+/* --- threads -------------------------------------------------------------
+   A reply and the cast it answers are one unit, so the border belongs to the
+   thread rather than to each cast inside it. The parent is muted and indented
+   to read as context. */
+.thread { border-bottom: 1px solid var(--rule); padding: .9rem 0; }
+.thread:last-child { border-bottom: 0; }
+.thread .cast { border-bottom: 0; padding: 0; }
+
+.thread .cast.parent { opacity: .72; font-size: .95em; }
+.thread .cast.parent .cast-text { margin-bottom: .25rem; }
+
+/* The connector: a rule down the left of the reply, tying it to the parent. */
+.thread .cast.reply {
+  margin-top: .55rem; padding-left: .95rem;
+  border-left: 2px solid var(--rule);
+}
+
+.cast.gone {
+  color: var(--muted); font-size: .85rem; font-style: italic;
+  padding: .3rem 0;
+}
+.cast-channel { margin: .2rem 0 0; font-size: .8rem; color: var(--muted); }
 .cast:last-child { border-bottom: 0; }
 .cast-head { display: flex; align-items: baseline; gap: .45rem; flex-wrap: wrap; font-size: .88rem; }
 .cast-author { font-weight: 650; }
