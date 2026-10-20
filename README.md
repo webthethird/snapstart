@@ -33,8 +33,9 @@ several are badly out of date. Everything here is read off a live system:
 | Claim | Documented | Measured |
 |---|---|---|
 | FID registration + storage | ~$10 | **~$0.20** (`IdGateway.price()`, 2026-10-17) |
-| Snapshot restore time | "up to 2 hours" | ~3.5 h reported by the node itself |
-| Node disk | 1.5 TB (repo README) / 2 TB (guides) | *measuring — but see below, 2 TB looks right* |
+| Snapshot restore time | "up to 2 hours" | **13 h 22 m**, one restore timed end to end |
+| Node's own restore ETA | ~3.5 h, from its progress bar | also wrong — it is ~4× optimistic |
+| Node disk | 1.5 TB (repo README) / 2 TB (guides) | **1.5 TB peak, 558 GB settled** |
 
 `npm run price` reads the current registration cost straight off Optimism. Don't
 trust the table above either — run it.
