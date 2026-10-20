@@ -47,6 +47,20 @@
     </section>
 
     <section class="panel">
+      <h2 class="sec">Media</h2>
+      <label class="filter-item">
+        <input type="checkbox" id="mediaToggle" checked>
+        <span>Load images</span>
+      </label>
+      <p class="hint" style="margin-bottom:0">
+        Images are fetched from whatever host the author used — Cloudflare, imgur,
+        and so on. Those requests come from your browser, so they are the one part
+        of this client that talks to a third party. Turn this off to keep the feed
+        entirely between you and your node.
+      </p>
+    </section>
+
+    <section class="panel">
       <h2 class="sec">Follow an FID</h2>
       <div class="row">
         <input id="followFid" inputmode="numeric" placeholder="e.g. 3" style="flex:1;min-width:0;padding:.45rem .6rem;background:var(--bg);border:1px solid var(--rule);border-radius:7px">

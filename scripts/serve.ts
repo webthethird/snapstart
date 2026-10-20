@@ -150,10 +150,28 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     const attributedAncestors = await attribute(node, realAncestors, resolver);
     const byHash = new Map(attributedAncestors.map((m) => [m.hash, m]));
 
+    // Quoted casts: an embed carrying a castId rather than a url. Resolved one
+    // level deep only — a quote of a quote of a quote would otherwise fan out
+    // without bound, and the cache is per-request so it would not even amortise.
+    const quoteRefs = new Map<string, { fid: number; hash: string }>();
+    for (const c of [...attributed, ...attributedAncestors]) {
+      for (const e of c.data.castAddBody?.embeds ?? []) {
+        if (e.castId) quoteRefs.set(`${e.castId.fid}:${e.castId.hash}`, e.castId);
+      }
+    }
+    const quoted = (
+      await Promise.all([...quoteRefs.values()].map((r) => getCast(r.fid, r.hash)))
+    ).filter((m): m is Message => m !== null);
+    const attributedQuotes = await attribute(node, quoted, resolver);
+    const quoteByKey = new Map(
+      attributedQuotes.map((m) => [`${m.data.fid}:${m.hash}`, m]),
+    );
+
     const authors = [
       ...new Set([
         ...attributed.map((c) => c.data.fid),
         ...attributedAncestors.map((c) => c.data.fid),
+        ...attributedQuotes.map((c) => c.data.fid),
       ]),
     ];
     const profiles = new Map<number, Awaited<ReturnType<typeof getProfile>>>();
@@ -169,6 +187,24 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       timestamp: toDate(c.data.timestamp).toISOString(),
       client: c.client,
       parentUrl: c.data.castAddBody?.parentUrl ?? null,
+      // Attachments. A url embed may be an image, a video or an ordinary link;
+      // a castId embed is a quoted cast. The node does not say which, so the
+      // client decides what to do with each.
+      embeds: c.data.castAddBody?.embeds ?? [],
+    });
+
+    /** Same as shape, plus any quoted casts resolved to real content. */
+    const shapeWithQuotes = (c: (typeof attributed)[number]) => ({
+      ...shape(c),
+      quotes: (c.data.castAddBody?.embeds ?? []).flatMap((e) => {
+        if (!e.castId) return [];
+        const q = quoteByKey.get(`${e.castId.fid}:${e.castId.hash}`);
+        return [
+          q
+            ? shape(q)
+            : { missing: true as const, fid: e.castId.fid, hash: e.castId.hash },
+        ];
+      }),
     });
 
     return send(res, 200, {
@@ -181,10 +217,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
           // Attribution covers every fetched ancestor, so this is belt and
           // braces: degrade to the stub rather than invent an attribution.
           return withClient
-            ? shape(withClient)
+            ? shapeWithQuotes(withClient)
             : { missing: true as const, fid: a.data.fid, hash: a.hash };
         });
-        return { ...shape(c), ancestors };
+        return { ...shapeWithQuotes(c), ancestors };
       }),
       breakdown: [...clientBreakdown(attributed)].map(([name, count]) => ({ name, count })),
     });

@@ -11,6 +11,7 @@ const api = async (path, opts) => {
 
 let casts = [];
 let excluded = new Set();   // client names the user has unticked
+let showMedia = localStorage.getItem("snapstart.media") !== "0";
 
 const relative = (iso) => {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -226,6 +227,123 @@ function castText(full) {
   return p;
 }
 
+/**
+ * Is this URL worth trying to render as an image?
+ *
+ * Extension alone is not enough: Warpcast's CDN serves images from paths like
+ * /BXluQx4ige9GuW0Ia56BHw/<uuid>/original, with no extension at all. So check
+ * the extension when there is one, and otherwise trust a short host list. Any
+ * mistake is caught by onerror, which falls back to a plain link.
+ */
+const IMAGE_EXT = /\.(jpe?g|png|gif|webp|avif|bmp)(\?|#|$)/i;
+const IMAGE_HOSTS = new Set([
+  "imagedelivery.net",
+  "i.imgur.com",
+  "media.tenor.com",
+  "media1.tenor.com",
+]);
+
+function looksLikeImage(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+    return IMAGE_EXT.test(u.pathname) || IMAGE_HOSTS.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function linkEl(url) {
+  const a = document.createElement("a");
+  a.className = "embed-link";
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.textContent = url;
+  return a;
+}
+
+function embedsEl(embeds) {
+  if (!embeds || embeds.length === 0) return null;
+
+  const box = document.createElement("div");
+  box.className = "embeds";
+  let used = 0;
+
+  for (const e of embeds) {
+    // castId embeds are rendered separately, as quote cards.
+    if (e.castId) continue;
+    if (!e.url) continue;
+
+    if (!looksLikeImage(e.url)) {
+      box.append(linkEl(e.url));
+      used++;
+      continue;
+    }
+
+    if (!showMedia) {
+      const off = document.createElement("p");
+      off.className = "embed-quote";
+      off.textContent = "image hidden — enable “Load images”";
+      box.append(off);
+      used++;
+      continue;
+    }
+
+    const img = document.createElement("img");
+    img.className = "embed-img";
+    img.loading = "lazy";
+    img.decoding = "async";
+    // Do not tell the host which feed the request came from.
+    img.referrerPolicy = "no-referrer";
+    img.alt = "";
+    img.src = e.url;
+    // Not an image after all, or the host is gone: degrade to the link.
+    img.onerror = () => img.replaceWith(linkEl(e.url));
+    box.append(img);
+    used++;
+  }
+
+  return used ? box : null;
+}
+
+/**
+ * A quoted cast, rendered as a card inside the quoting one.
+ *
+ * Resolved server-side and only one level deep: a quote card does not itself
+ * render further quotes, or a chain of them would fan out without bound. Its
+ * images do render, since that is usually the point of the quote.
+ */
+function quoteEl(q) {
+  const card = document.createElement("div");
+  card.className = "quote-card";
+
+  if (q.missing) {
+    card.classList.add("gone");
+    card.textContent = `a quoted cast that is no longer on this node (fid ${q.fid})`;
+    return card;
+  }
+
+  const head = document.createElement("div");
+  head.className = "cast-head";
+  const who = document.createElement("span");
+  who.className = "cast-author";
+  who.textContent = q.displayName || q.author;
+  const meta = document.createElement("span");
+  meta.className = "cast-meta";
+  meta.textContent = `@${q.author} · ${relative(q.timestamp)}`;
+  const chip = document.createElement("span");
+  chip.className = `chip${q.client.source === "self" ? " self" : ""}`;
+  chip.textContent = clientLabel(q.client);
+  chip.title = `source: ${q.client.source}`;
+  head.append(who, meta, chip);
+  card.append(head, castText(q.text));
+
+  const media = embedsEl(q.embeds);
+  if (media) card.append(media);
+  return card;
+}
+
 function castEl(c, { actions = true, context = false } = {}) {
   const el = document.createElement("article");
   el.className = `cast${context ? " context" : ""}`;
@@ -254,6 +372,11 @@ function castEl(c, { actions = true, context = false } = {}) {
   }
 
   el.append(castText(c.text));
+
+  const media = embedsEl(c.embeds);
+  if (media) el.append(media);
+
+  for (const q of c.quotes ?? []) el.append(quoteEl(q));
 
   if (actions) {
     const bar = document.createElement("div");
@@ -342,6 +465,16 @@ $("followBtn").onclick = async () => {
   } catch (e) { toast(e.message, true); }
   $("followBtn").disabled = false;
 };
+
+const mediaToggle = $("mediaToggle");
+if (mediaToggle) {
+  mediaToggle.checked = showMedia;
+  mediaToggle.onchange = () => {
+    showMedia = mediaToggle.checked;
+    localStorage.setItem("snapstart.media", showMedia ? "1" : "0");
+    renderFeed();   // no refetch: the feed already carries the embeds
+  };
+}
 
 $("allOn").onclick = () => { excluded.clear(); loadFeed(); };
 $("allOff").onclick = () => {

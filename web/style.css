@@ -79,6 +79,30 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   color: var(--muted); font-size: .8rem; font-style: italic;
   padding: .3rem 0;
 }
+.quote-card {
+  margin: .6rem 0 .2rem;
+  padding: .7rem .8rem;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.quote-card .cast-text { margin: .3rem 0 0; font-size: .95em; }
+.quote-card .embed-img { max-height: 20rem; }
+.quote-card.gone { color: var(--muted); font-size: .8rem; font-style: italic; }
+
+.embeds { display: flex; flex-direction: column; gap: .5rem; margin: .5rem 0 .2rem; }
+.embed-img {
+  display: block; max-width: 100%; height: auto;
+  max-height: 32rem; object-fit: contain; object-position: left;
+  border: 1px solid var(--rule); border-radius: 8px; background: var(--bg);
+}
+.embed-link {
+  color: var(--accent); font-size: .85rem; text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.embed-link:hover { text-decoration: underline; }
+.embed-quote { margin: 0; font-size: .8rem; color: var(--muted); font-style: italic; }
+
 .show-more {
   display: inline; background: none; border: 0; padding: 0;
   color: var(--accent); font: inherit; font-weight: 500; cursor: pointer;
