@@ -56,17 +56,20 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .cast { padding: .9rem 0; border-bottom: 1px solid var(--rule); }
 
 /* --- threads -------------------------------------------------------------
-   A conversation is one unit, so the separator belongs to the thread rather
-   than to each cast in it. Rendered flat with a single rail: nesting per level
-   makes a six-deep exchange unreadable, and time order carries the structure. */
-.thread {
-  border-bottom: 1px solid var(--rule);
-  padding: .9rem 0 .9rem .95rem;
-  border-left: 2px solid var(--rule);
-  margin-left: .1rem;
-}
+   A conversation is one unit, so the separator belongs to the thread. The cast
+   that started it sits flush with every other top-level cast; everything
+   answering it shares one indented rail — a single level, however deep the
+   conversation runs, because six levels of nesting is unreadable and time
+   order already carries the structure. */
+.thread { border-bottom: 1px solid var(--rule); padding: .9rem 0; }
 .thread:last-child { border-bottom: 0; }
 .thread .cast { border-bottom: 0; padding: .45rem 0; }
+
+.thread-replies {
+  margin-top: .3rem;
+  padding-left: .95rem;
+  border-left: 2px solid var(--rule);
+}
 
 /* Ancestors pulled in for context, rather than casts from your own feed. */
 .cast.context { opacity: .68; }

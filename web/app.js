@@ -160,15 +160,26 @@ function threadEl(group) {
     return new Date(a.timestamp) - new Date(b.timestamp);
   });
 
-  for (const n of ordered) {
+  const render = (n) => {
     if (n.missing) {
       const gone = document.createElement("div");
       gone.className = "cast gone";
       gone.textContent = `earlier casts in this thread are no longer on this node (fid ${n.fid})`;
-      wrap.append(gone);
-      continue;
+      return gone;
     }
-    wrap.append(castEl(n, { actions: inFeed.has(n.hash), context: !inFeed.has(n.hash) }));
+    return castEl(n, { actions: inFeed.has(n.hash), context: !inFeed.has(n.hash) });
+  };
+
+  // The cast that started the thread sits flush with every other top-level cast
+  // in the feed. Everything answering it goes in one indented group sharing a
+  // single rail — one level, however deep the conversation actually runs.
+  const [root, ...replies] = ordered;
+  wrap.append(render(root));
+  if (replies.length) {
+    const box = document.createElement("div");
+    box.className = "thread-replies";
+    for (const n of replies) box.append(render(n));
+    wrap.append(box);
   }
   return wrap;
 }
