@@ -23,8 +23,16 @@ STATE_DIR=".state"
 SSH_KEY="$STATE_DIR/id_snapstart"
 API="https://api.hetzner.cloud/v1"
 
-# Resource names. Reused on re-runs, which is what makes this idempotent.
-NAME="snapstart-node"
+# Resource names. Reused on re-runs, which is what makes this idempotent:
+# provisioning twice finds the instance tagged with this name and adopts it
+# rather than creating a second one.
+#
+# Override it to run a second, independent node — a staging box, or a from-zero
+# rehearsal while your real node keeps serving. It namespaces the instance tag,
+# the security group AND the key pair; sharing the key pair across two checkouts
+# would hand the new instance the old checkout's public key, leaving a box you
+# cannot ssh into.
+NAME="${SNAPSTART_NAME:-snapstart-node}"
 
 # AWS is the default because it is the only provider we have verified can
 # actually complete a restore on a brand-new account.
@@ -45,7 +53,13 @@ PROVIDER="${SNAPSTART_PROVIDER:-aws}"
 # State is per-provider. A single node.json meant provisioning on AWS silently
 # clobbered the record of a running Hetzner node — leaving a billing server with
 # no local trace of how to reach or destroy it.
-STATE_FILE="$STATE_DIR/node-$PROVIDER.json"
+# Named nodes get their own state file too, so a second node in the same
+# checkout cannot overwrite the record of the first.
+if [ "$NAME" = "snapstart-node" ]; then
+  STATE_FILE="$STATE_DIR/node-$PROVIDER.json"
+else
+  STATE_FILE="$STATE_DIR/node-$PROVIDER-$NAME.json"
+fi
 
 # A legacy node.json is honoured only when it actually belongs to this provider.
 # Matching on filename alone reintroduced the clobber: with PROVIDER=aws and a
