@@ -598,7 +598,11 @@ node_user() {
 
 node_ssh() {
   [ -f "$STATE_FILE" ] || die "nothing provisioned yet. Run ./snapstart provision"
+  # The install step can run for many minutes with no output. Without keepalives
+  # the link times out mid-command and ssh returns non-zero for a step that
+  # actually succeeded.
   ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
     "$(node_user)@$(jq -r .ip "$STATE_FILE")" "$@"
 }
 
@@ -662,7 +666,19 @@ ENVEOF
       tail -20 /tmp/snapchain-upgrade.log
       exit 1
     }
-  " || die "node failed to start"
+  " || {
+    # Losing the connection is not the same as the node failing to start. The
+    # upgrade step is long and silent, and the far side keeps running after the
+    # link drops — observed on a from-zero run: ssh reported a broken pipe while
+    # the restore was already underway. Reconnect and judge by what is running.
+    info "lost the connection during install — checking whether the node came up anyway"
+    sleep 10
+    if node_ssh "docker ps --format '{{.Names}}' | grep -q snapchain" >/dev/null 2>&1; then
+      info "it did: snapchain is running"
+    else
+      die "node failed to start"
+    fi
+  }
 
   info "node started; restoring from snapshot"
   echo
