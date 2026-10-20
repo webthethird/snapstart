@@ -308,6 +308,39 @@ function embedsEl(embeds) {
 }
 
 /**
+ * The author's avatar.
+ *
+ * Gated on the same "Load images" toggle as embeds: a profile picture is hosted
+ * by whoever the author chose, so it is the same third-party request. With the
+ * toggle off — or when an account has set no pfp, which every new FID starts out
+ * as — this falls back to a monogram drawn locally.
+ */
+function avatarEl(c, { small = false } = {}) {
+  const letter = (c.displayName || c.author || "?").trim()[0] || "?";
+
+  const fallback = () => {
+    const d = document.createElement("div");
+    d.className = `avatar fallback${small ? " small" : ""}`;
+    d.textContent = letter.toUpperCase();
+    // Stable per author, so the same person keeps the same colour.
+    d.style.setProperty("--hue", String((c.fid ?? 0) * 47 % 360));
+    return d;
+  };
+
+  if (!showMedia || !c.pfp) return fallback();
+
+  const img = document.createElement("img");
+  img.className = `avatar${small ? " small" : ""}`;
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.referrerPolicy = "no-referrer";
+  img.alt = "";
+  img.src = c.pfp;
+  img.onerror = () => img.replaceWith(fallback());
+  return img;
+}
+
+/**
  * A quoted cast, rendered as a card inside the quoting one.
  *
  * Resolved server-side and only one level deep: a quote card does not itself
@@ -336,7 +369,7 @@ function quoteEl(q) {
   chip.className = `chip${q.client.source === "self" ? " self" : ""}`;
   chip.textContent = clientLabel(q.client);
   chip.title = `source: ${q.client.source}`;
-  head.append(who, meta, chip);
+  head.append(avatarEl(q, { small: true }), who, meta, chip);
   card.append(head, castText(q.text));
 
   const media = embedsEl(q.embeds);
@@ -347,6 +380,13 @@ function quoteEl(q) {
 function castEl(c, { actions = true, context = false } = {}) {
   const el = document.createElement("article");
   el.className = `cast${context ? " context" : ""}`;
+  el.append(avatarEl(c));
+
+  // Everything but the avatar lives in this column, so long words and wide
+  // code blocks wrap against it rather than pushing the row wider.
+  const body = document.createElement("div");
+  body.className = "cast-body";
+  el.append(body);
 
   const head = document.createElement("div");
   head.className = "cast-head";
@@ -361,22 +401,22 @@ function castEl(c, { actions = true, context = false } = {}) {
   chip.textContent = clientLabel(c.client);
   chip.title = `source: ${c.client.source}`;
   head.append(who, meta, chip);
-  el.append(head);
+  body.append(head);
 
   if (c.parentUrl) {
     const ch = document.createElement("p");
     ch.className = "cast-channel";
     ch.textContent = `in ${channelLabel(c.parentUrl)}`;
     ch.title = c.parentUrl;
-    el.append(ch);
+    body.append(ch);
   }
 
-  el.append(castText(c.text));
+  body.append(castText(c.text));
 
   const media = embedsEl(c.embeds);
-  if (media) el.append(media);
+  if (media) body.append(media);
 
-  for (const q of c.quotes ?? []) el.append(quoteEl(q));
+  for (const q of c.quotes ?? []) body.append(quoteEl(q));
 
   if (actions) {
     const bar = document.createElement("div");
@@ -385,7 +425,7 @@ function castEl(c, { actions = true, context = false } = {}) {
       actionButton("♡ like", () => react(c, "like")),
       actionButton("↻ recast", () => react(c, "recast")),
     );
-    el.append(bar);
+    body.append(bar);
   }
   return el;
 }

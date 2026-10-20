@@ -53,7 +53,27 @@ button {
 button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--rule); font-weight: 500; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 
-.cast { padding: .9rem 0; border-bottom: 1px solid var(--rule); }
+.cast {
+  padding: .9rem 0; border-bottom: 1px solid var(--rule);
+  display: flex; gap: .6rem; align-items: flex-start;
+}
+/* The text column must be allowed to shrink, or a long URL widens the row. */
+.cast-body { min-width: 0; flex: 1; }
+
+.avatar {
+  width: 2.3rem; height: 2.3rem; flex: 0 0 auto;
+  border-radius: 50%; object-fit: cover;
+  background: var(--chip); border: 1px solid var(--rule);
+}
+.avatar.small { width: 1.4rem; height: 1.4rem; }
+
+/* Drawn locally when there is no pfp, or images are turned off. */
+.avatar.fallback {
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 650; font-size: .95rem; color: #fff; border: 0;
+  background: hsl(var(--hue, 265) 45% 45%);
+}
+.avatar.fallback.small { font-size: .65rem; }
 
 /* --- threads -------------------------------------------------------------
    A conversation is one unit, so the separator belongs to the thread. The cast
@@ -111,6 +131,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .cast-channel { margin: .2rem 0 0; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
 .cast:last-child { border-bottom: 0; }
 .cast-head { display: flex; align-items: baseline; gap: .45rem; flex-wrap: wrap; font-size: .88rem; }
+/* The quote card's avatar sits inline in a baseline row; centre it instead. */
+.cast-head .avatar { align-self: center; }
 .cast-author { font-weight: 650; }
 .cast-meta { color: var(--muted); }
 .cast-text { margin: .35rem 0 .5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
