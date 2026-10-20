@@ -79,6 +79,11 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   color: var(--muted); font-size: .8rem; font-style: italic;
   padding: .3rem 0;
 }
+.show-more {
+  display: inline; background: none; border: 0; padding: 0;
+  color: var(--accent); font: inherit; font-weight: 500; cursor: pointer;
+}
+.show-more:hover { text-decoration: underline; }
 .cast-channel { margin: .2rem 0 0; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
 .cast:last-child { border-bottom: 0; }
 .cast-head { display: flex; align-items: baseline; gap: .45rem; flex-wrap: wrap; font-size: .88rem; }

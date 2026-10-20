@@ -184,6 +184,48 @@ function threadEl(group) {
   return wrap;
 }
 
+/** Longer casts are clamped; the rest is one click away. */
+const CLAMP = 320;
+
+/**
+ * A channel reference, shortened.
+ *
+ * parentUrl on a channel cast is the Warpcast-era identifier: an NFT contract,
+ * e.g. chain://eip155:7777777/erc721:0x4f86…7628. The human name ("/farcaster")
+ * is not on the protocol — snapchain's own channel registry is keyed by a
+ * 32-byte id and is empty on mainnet, and the name lives in Warpcast's API.
+ * Resolving it would need exactly the API key this project does without, so
+ * show the contract and keep the full URI on hover.
+ */
+function channelLabel(url) {
+  const m = /erc721:(0x[0-9a-fA-F]{6,})/.exec(url);
+  if (m) return `channel ${m[1].slice(0, 8)}…${m[1].slice(-4)}`;
+  return url;
+}
+
+function castText(full) {
+  const p = document.createElement("p");
+  p.className = "cast-text";
+
+  if (full.length <= CLAMP) {
+    p.textContent = full;                 // textContent, never innerHTML
+    return p;
+  }
+
+  const toggle = document.createElement("button");
+  toggle.className = "show-more";
+  let open = false;
+
+  const draw = () => {
+    p.textContent = open ? full + " " : full.slice(0, CLAMP).trimEnd() + "… ";
+    toggle.textContent = open ? "Show less" : "Show more";
+    p.append(toggle);
+  };
+  toggle.onclick = () => { open = !open; draw(); };
+  draw();
+  return p;
+}
+
 function castEl(c, { actions = true, context = false } = {}) {
   const el = document.createElement("article");
   el.className = `cast${context ? " context" : ""}`;
@@ -206,14 +248,12 @@ function castEl(c, { actions = true, context = false } = {}) {
   if (c.parentUrl) {
     const ch = document.createElement("p");
     ch.className = "cast-channel";
-    ch.textContent = `in ${c.parentUrl}`;
+    ch.textContent = `in ${channelLabel(c.parentUrl)}`;
+    ch.title = c.parentUrl;
     el.append(ch);
   }
 
-  const text = document.createElement("p");
-  text.className = "cast-text";
-  text.textContent = c.text;           // textContent, never innerHTML
-  el.append(text);
+  el.append(castText(c.text));
 
   if (actions) {
     const bar = document.createElement("div");
