@@ -69,6 +69,19 @@ export type Signer = {
   /** Present on gasless registrations. */
   metadata?: string;
   metadataType?: number;
+  /**
+   * Gasless registrations report the requesting app's FID directly, rather than
+   * ABI-encoding it into `metadata` the way onchain ones do. Verified on a live
+   * node: an offchain signer returns no `metadata` at all, only this.
+   */
+  requestFid?: number;
+  /** Message types this key may sign. Gasless keys are scoped; onchain ones are not. */
+  scopes?: string[];
+  ttl?: number;
+  expiresAt?: number;
+  lastUsedAt?: number;
+  /** The nonce this key was registered with. */
+  nonce?: number;
 };
 
 export type SignersResponse = {

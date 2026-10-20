@@ -134,8 +134,13 @@ export class ClientResolver {
     try {
       const { signers } = await this.node.signersByFid(authorFid);
       for (const signer of signers) {
+        // Gasless registrations expose `requestFid` directly on the signer and carry
+        // no `metadata` at all; onchain ones ABI-encode it into the blob. Checking
+        // only the blob silently dropped every gasless key to "unknown", which made
+        // a client unable to recognise its own posts.
         const metadata = metadataOf(signer);
-        const requestFid = metadata ? requestFidFromMetadata(metadata) : undefined;
+        const requestFid =
+          signer.requestFid ?? (metadata ? requestFidFromMetadata(metadata) : undefined);
 
         // `source` is reported by the node, so there is nothing to infer.
         const source: AttributionSource =
@@ -202,8 +207,15 @@ export type ClientFilter = {
 
 function matches(client: ClientInfo, needle: string | number): boolean {
   if (typeof needle === "number") return client.requestFid === needle;
-  const name = client.name?.toLowerCase();
-  return name !== undefined && name === needle.toLowerCase();
+
+  const wanted = needle.trim().toLowerCase();
+  if (client.name !== undefined && client.name.toLowerCase() === wanted) return true;
+
+  // `clientBreakdown` labels a client with no profile name as "fid:N". That label
+  // is what a UI shows and hands back here, so it has to round-trip — otherwise
+  // excluding such a client appears to work and silently does nothing.
+  const asFid = /^fid:(\d+)$/.exec(wanted);
+  return asFid !== null && client.requestFid === Number(asFid[1]);
 }
 
 /**

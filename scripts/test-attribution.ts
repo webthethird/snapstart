@@ -103,6 +103,32 @@ check(
   filterByClient(feed, { include: ["snapstart"] }).length === 1,
 );
 
+// A gasless key whose app has no profile name. The node reports `requestFid`
+// directly on the signer and no metadata at all, so this is the shape a real
+// self-issued key takes before the account sets a username.
+const nameless: ClientInfo = { requestFid: 424242, name: undefined, source: "self" };
+const namelessFeed = [cast(7, nameless), cast(8, warpcast)];
+
+check(
+  "a nameless client is labelled fid:N",
+  clientBreakdown(namelessFeed).get("fid:424242") === 1,
+);
+
+check(
+  "that label round-trips back into exclude",
+  filterByClient(namelessFeed, { exclude: ["fid:424242"] }).length === 1,
+);
+
+check(
+  "that label round-trips back into include",
+  filterByClient(namelessFeed, { include: ["fid:424242"] }).length === 1,
+);
+
+check(
+  "a fid: label does not match a different fid",
+  filterByClient(namelessFeed, { exclude: ["fid:9999"] }).length === 2,
+);
+
 // --- breakdown -------------------------------------------------------------
 
 const breakdown = clientBreakdown([...feed, cast(5, warpcast)]);
