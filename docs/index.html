@@ -255,23 +255,35 @@ ul.plain li{margin:.35rem 0}
 <section class="band">
   <div class="wrap">
     <p class="eyebrow">Read this before step 1</p>
-    <h2>Check the clock before you start the node.</h2>
+    <h2>Start after 13:35&nbsp;UTC, not before.</h2>
     <p class="narrow" style="color:#c9c5c0">
       Snapchain republishes each shard's snapshot daily and deletes the previous one.
-      A restore takes 8&ndash;12 hours and fetches shards <strong>one at a time</strong>,
-      so a shard whose snapshot is replaced before the restore reaches it gets
-      <code>404</code> on every chunk. Do not trust the times below &mdash; read the
-      manifest yourself, because they drift.
+      Your node reads all three manifests when it starts, then restores shards
+      <strong>one at a time</strong> &mdash; so every shard inherits a deadline: the next
+      time <em>its own</em> snapshot rotates. Miss it and every remaining chunk returns
+      <code>404</code>.
+    </p>
+    <p class="narrow" style="color:#c9c5c0">
+      The intuitive move is to start just after the first rotation of the day. That is
+      the worst choice available. It gives shard&nbsp;2 a 2.7&nbsp;hour deadline against
+      a restore that takes 10&ndash;15&nbsp;hours.
     </p>
     <div class="grid g3" style="margin-top:1.8rem">
-      <div class="card"><div class="k">Start after</div><div class="v">05:20<small> UTC</small></div><p>Just past the earliest rotation buys a full day of headroom before any shard is replaced.</p></div>
-      <div class="card"><div class="k">Roughly, in UTC</div><div class="v mono" style="font-size:1rem">shard 0 &mdash; 05:18<br>shard 2 &mdash; 08:04<br>shard 1 &mdash; 13:29</div><p>Measured 17&ndash;19 Oct 2026. Shard 0 held to &plusmn;7s over three days; shard 1 slid 6 minutes later over two.</p></div>
-      <div class="card"><div class="k">If it fails</div><div class="v">Loudly, then not at all</div><p>The 404s are logged and the restore dies. A half-restored node still serves reads and rejects every write.</p></div>
+      <div class="card"><div class="k">Start after</div><div class="v">13:35<small> UTC</small></div><p>Just past the last of the three rotations. Leaves 15.7h before the tightest deadline.</p></div>
+      <div class="card"><div class="k">Rotations, roughly</div><div class="v mono" style="font-size:1rem">shard 0 &mdash; 05:18<br>shard 2 &mdash; 08:04<br>shard 1 &mdash; 13:29</div><p>Measured 17&ndash;19 Oct 2026. Shard 0 held to &plusmn;7s over three days; shard 1 slid 6 minutes later over two.</p></div>
+      <div class="card"><div class="k">Restore takes</div><div class="v">10&ndash;15<small> hours</small></div><p>Per shard: download, unzip, then unpack the tar into RocksDB. Measured on an m5.xlarge with gp3.</p></div>
     </div>
     <p class="narrow" style="color:#c9c5c0;margin-top:1.8rem">
-      Each shard publishes a manifest whose <code>timestamp</code> field is the moment
-      that snapshot was written. That is the authoritative answer, and it costs three
-      requests:
+      Starting just after the <em>latest</em> rotation is what maximises the tightest
+      deadline you face. The other two starts look safe and are not:
+    </p>
+<pre><code>start just after   shard 0   shard 2   shard 1   tightest
+05:24                23.9h      2.7h      8.1h       2.7h   x
+08:10                21.1h     23.9h      5.3h       5.3h   x
+13:35                15.7h     18.5h     23.9h      15.7h   ok</code></pre>
+    <p class="narrow" style="color:#c9c5c0">
+      Those times drift, so confirm the new snapshot has actually published before you
+      start rather than trusting the clock:
     </p>
 <pre><code>R2=https://pub-d352dd8819104a778e20d08888c5a661.r2.dev/FARCASTER_NETWORK_MAINNET
 for s in 0 1 2; do
@@ -280,6 +292,11 @@ import sys, json, datetime as d
 t = json.load(sys.stdin)['timestamp'] / 1000
 print('shard $s', d.datetime.fromtimestamp(t, d.timezone.utc))"
 done</code></pre>
+    <p class="narrow" style="color:#c9c5c0">
+      A restore that loses this race fails loudly &mdash; repeated 404s, then a panic.
+      What is quiet is the aftermath: a half-restored node still answers reads, so it
+      looks healthy while rejecting every write.
+    </p>
   </div>
 </section>
 
