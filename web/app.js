@@ -98,38 +98,84 @@ function renderFeed() {
     return;
   }
   box.innerHTML = "";
-  for (const c of visible) {
-    box.append(c.replyTo ? threadEl(c) : castEl(c, { actions: true }));
+  for (const group of groupIntoThreads(visible)) {
+    box.append(group.length === 1 && !group[0].ancestors?.length
+      ? castEl(group[0], { actions: true })
+      : threadEl(group));
   }
 }
 
 /**
- * A reply shown under the cast it answers.
+ * Group feed casts into conversations.
  *
- * Snapchain has no thread object — a reply is just a cast carrying parentCastId,
- * and the client reconstructs the pair. The parent is rendered muted and without
- * action buttons, so it reads as context rather than as a second feed item.
+ * Two replies in the same exchange share ancestors, so rendering each with its
+ * own parent chain splits one conversation into several blocks that repeat the
+ * same casts. Keying on the root collapses them into a single thread.
+ *
+ * Order is by the newest cast in each thread, so an active conversation does not
+ * sink just because it started days ago.
  */
-function threadEl(c) {
+function groupIntoThreads(visible) {
+  const groups = new Map();
+  for (const c of visible) {
+    const root = c.ancestors?.length ? c.ancestors[0] : c;
+    const key = root.hash;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(c);
+  }
+  const out = [...groups.values()];
+  out.sort((a, b) => newest(b) - newest(a));
+  return out;
+}
+
+function newest(group) {
+  return Math.max(...group.map((c) => new Date(c.timestamp).getTime()));
+}
+
+/**
+ * One conversation: every ancestor plus every feed cast in it, in time order.
+ *
+ * Rendered flat with a single rail rather than nesting per level — a six-deep
+ * exchange indented six times is unreadable, and ordering already carries the
+ * structure.
+ */
+function threadEl(group) {
   const wrap = document.createElement("div");
   wrap.className = "thread";
 
-  if (c.replyTo.missing) {
-    const gone = document.createElement("div");
-    gone.className = "cast parent gone";
-    gone.textContent = `Replying to a cast that is no longer on this node (fid ${c.replyTo.fid})`;
-    wrap.append(gone);
-  } else {
-    wrap.append(castEl(c.replyTo, { actions: false, parent: true }));
+  // Feed casts are actionable; ancestors are context pulled in to explain them.
+  const inFeed = new Set(group.map((c) => c.hash));
+  const nodes = new Map();
+  for (const c of group) {
+    for (const a of c.ancestors ?? []) {
+      const key = a.missing ? `missing:${a.fid}:${a.hash}` : a.hash;
+      if (!nodes.has(key)) nodes.set(key, a);
+    }
+    nodes.set(c.hash, c);
   }
 
-  wrap.append(castEl(c, { actions: true, reply: true }));
+  const ordered = [...nodes.values()].sort((a, b) => {
+    if (a.missing) return -1;
+    if (b.missing) return 1;
+    return new Date(a.timestamp) - new Date(b.timestamp);
+  });
+
+  for (const n of ordered) {
+    if (n.missing) {
+      const gone = document.createElement("div");
+      gone.className = "cast gone";
+      gone.textContent = `earlier casts in this thread are no longer on this node (fid ${n.fid})`;
+      wrap.append(gone);
+      continue;
+    }
+    wrap.append(castEl(n, { actions: inFeed.has(n.hash), context: !inFeed.has(n.hash) }));
+  }
   return wrap;
 }
 
-function castEl(c, { actions = true, parent = false, reply = false } = {}) {
+function castEl(c, { actions = true, context = false } = {}) {
   const el = document.createElement("article");
-  el.className = `cast${parent ? " parent" : ""}${reply ? " reply" : ""}`;
+  el.className = `cast${context ? " context" : ""}`;
 
   const head = document.createElement("div");
   head.className = "cast-head";
@@ -146,8 +192,7 @@ function castEl(c, { actions = true, parent = false, reply = false } = {}) {
   head.append(who, meta, chip);
   el.append(head);
 
-  if (c.parentUrl && !parent) {
-    // A reply addressed to a channel rather than to a cast.
+  if (c.parentUrl) {
     const ch = document.createElement("p");
     ch.className = "cast-channel";
     ch.textContent = `in ${c.parentUrl}`;

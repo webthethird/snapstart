@@ -56,27 +56,27 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .cast { padding: .9rem 0; border-bottom: 1px solid var(--rule); }
 
 /* --- threads -------------------------------------------------------------
-   A reply and the cast it answers are one unit, so the border belongs to the
-   thread rather than to each cast inside it. The parent is muted and indented
-   to read as context. */
-.thread { border-bottom: 1px solid var(--rule); padding: .9rem 0; }
-.thread:last-child { border-bottom: 0; }
-.thread .cast { border-bottom: 0; padding: 0; }
-
-.thread .cast.parent { opacity: .72; font-size: .95em; }
-.thread .cast.parent .cast-text { margin-bottom: .25rem; }
-
-/* The connector: a rule down the left of the reply, tying it to the parent. */
-.thread .cast.reply {
-  margin-top: .55rem; padding-left: .95rem;
+   A conversation is one unit, so the separator belongs to the thread rather
+   than to each cast in it. Rendered flat with a single rail: nesting per level
+   makes a six-deep exchange unreadable, and time order carries the structure. */
+.thread {
+  border-bottom: 1px solid var(--rule);
+  padding: .9rem 0 .9rem .95rem;
   border-left: 2px solid var(--rule);
+  margin-left: .1rem;
 }
+.thread:last-child { border-bottom: 0; }
+.thread .cast { border-bottom: 0; padding: .45rem 0; }
+
+/* Ancestors pulled in for context, rather than casts from your own feed. */
+.cast.context { opacity: .68; }
+.cast.context .cast-text { font-size: .95em; }
 
 .cast.gone {
-  color: var(--muted); font-size: .85rem; font-style: italic;
+  color: var(--muted); font-size: .8rem; font-style: italic;
   padding: .3rem 0;
 }
-.cast-channel { margin: .2rem 0 0; font-size: .8rem; color: var(--muted); }
+.cast-channel { margin: .2rem 0 0; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
 .cast:last-child { border-bottom: 0; }
 .cast-head { display: flex; align-items: baseline; gap: .45rem; flex-wrap: wrap; font-size: .88rem; }
 .cast-author { font-weight: 650; }

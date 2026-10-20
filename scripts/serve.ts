@@ -18,7 +18,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "./actions.js";
 import { ClientResolver, attribute, clientBreakdown, filterByClient } from "./attribution.js";
-import { DEFAULT_NODE_URL, Snapchain, getHomeFeed, getProfile, toDate } from "./snapchain.js";
+import { DEFAULT_NODE_URL, type Message, Snapchain, getHomeFeed, getProfile, toDate } from "./snapchain.js";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.SNAPSTART_UI_PORT ?? 4173);
@@ -95,47 +95,69 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   if (path === "/api/feed") {
     const limit = Number(url.searchParams.get("limit") ?? 50);
     const feed = await getHomeFeed(node, fid, { limit, perAuthor: 4 });
-    const attributed = await attribute(node, feed, resolver);
 
-    // A reply is just a cast with parentCastId set. Snapchain stores no thread
-    // structure — the client reconstructs it by fetching each parent. Replies to
-    // a channel carry parentUrl instead and have no parent cast to fetch.
-    const parentRefs = new Map<string, { fid: number; hash: string }>();
-    for (const c of attributed) {
-      const p = c.data.castAddBody?.parentCastId;
-      if (p) parentRefs.set(`${p.fid}:${p.hash}`, p);
-    }
+    // Snapchain stores no thread object. A reply is a cast carrying
+    // parentCastId, so a conversation is reconstructed by walking that pointer
+    // to the root — which is the client's job, and worth showing plainly.
+    //
+    // One cache for the whole request: a six-deep exchange that appears twice in
+    // a feed shares every ancestor, and without this each copy refetches them.
+    const castCache = new Map<string, Message | null>();
+    const getCast = async (f: number, h: string): Promise<Message | null> => {
+      const key = `${f}:${h}`;
+      if (castCache.has(key)) return castCache.get(key)!;
+      let got: Message | null = null;
+      try {
+        got = await node.castById(f, h);
+      } catch {
+        // Deleted by its author, or pruned when their storage filled. Expected.
+        got = null;
+      }
+      castCache.set(key, got);
+      return got;
+    };
 
-    // The parent may be unreachable: deleted by its author, or pruned once the
-    // account ran out of storage. That is normal, not an error — show the reply
-    // with a stub rather than dropping it.
-    const parents = new Map<string, Awaited<ReturnType<typeof node.castById>> | null>();
-    await Promise.all(
-      [...parentRefs].map(async ([key, ref]) => {
-        try {
-          parents.set(key, await node.castById(ref.fid, ref.hash));
-        } catch {
-          parents.set(key, null);
+    type Missing = { missing: true; fid: number; hash: string };
+    const MAX_DEPTH = 25;
+
+    /** Ancestors of a cast, root first. Stops at a missing parent or a cycle. */
+    const ancestorsOf = async (cast: Message): Promise<(Message | Missing)[]> => {
+      const chain: (Message | Missing)[] = [];
+      const seen = new Set<string>([`${cast.data.fid}:${cast.hash}`]);
+      let cur: Message = cast;
+      for (let depth = 0; depth < MAX_DEPTH; depth++) {
+        const ref = cur.data.castAddBody?.parentCastId;
+        if (!ref) break;
+        const key = `${ref.fid}:${ref.hash}`;
+        if (seen.has(key)) break; // defensive: a parent pointer that loops
+        seen.add(key);
+        const parent = await getCast(ref.fid, ref.hash);
+        if (!parent) {
+          chain.push({ missing: true, fid: ref.fid, hash: ref.hash });
+          break;
         }
-      }),
-    );
+        chain.push(parent);
+        cur = parent;
+      }
+      return chain.reverse();
+    };
 
-    const fetchedParents = [...parents.values()].filter((m) => m !== null);
-    const attributedParents = await attribute(node, fetchedParents, resolver);
-    const parentByKey = new Map(
-      attributedParents.map((m) => [`${m.data.fid}:${m.hash}`, m]),
-    );
+    const chains = await Promise.all(feed.map(ancestorsOf));
+
+    // Attribute and profile the feed and every ancestor in one pass.
+    const realAncestors = chains.flat().filter((m): m is Message => !("missing" in m));
+    const attributed = await attribute(node, feed, resolver);
+    const attributedAncestors = await attribute(node, realAncestors, resolver);
+    const byHash = new Map(attributedAncestors.map((m) => [m.hash, m]));
 
     const authors = [
       ...new Set([
         ...attributed.map((c) => c.data.fid),
-        ...attributedParents.map((c) => c.data.fid),
+        ...attributedAncestors.map((c) => c.data.fid),
       ]),
     ];
     const profiles = new Map<number, Awaited<ReturnType<typeof getProfile>>>();
-    await Promise.all(
-      authors.map(async (a) => profiles.set(a, await getProfile(node, a))),
-    );
+    await Promise.all(authors.map(async (a) => profiles.set(a, await getProfile(node, a))));
 
     const shape = (c: (typeof attributed)[number]) => ({
       hash: c.hash,
@@ -146,25 +168,23 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       text: c.data.castAddBody?.text ?? "",
       timestamp: toDate(c.data.timestamp).toISOString(),
       client: c.client,
+      parentUrl: c.data.castAddBody?.parentUrl ?? null,
     });
 
     return send(res, 200, {
-      casts: attributed.map((c) => {
-        const ref = c.data.castAddBody?.parentCastId;
-        const key = ref ? `${ref.fid}:${ref.hash}` : undefined;
-        const parent = key ? parentByKey.get(key) : undefined;
-        return {
-          ...shape(c),
-          // Present only on replies. `parent` is null when the parent could not
-          // be fetched, so the UI can say so instead of pretending it is a root.
-          replyTo: ref
-            ? parent
-              ? shape(parent)
-              : { missing: true, fid: ref.fid, hash: ref.hash }
-            : null,
-          // Channel replies have a parentUrl and no parent cast.
-          parentUrl: c.data.castAddBody?.parentUrl ?? null,
-        };
+      casts: attributed.map((c, i) => {
+        // Root first, immediate parent last. A trailing {missing:true} means the
+        // walk stopped because that cast is no longer on this node.
+        const ancestors = (chains[i] ?? []).map((a) => {
+          if ("missing" in a) return a;
+          const withClient = byHash.get(a.hash);
+          // Attribution covers every fetched ancestor, so this is belt and
+          // braces: degrade to the stub rather than invent an attribution.
+          return withClient
+            ? shape(withClient)
+            : { missing: true as const, fid: a.data.fid, hash: a.hash };
+        });
+        return { ...shape(c), ancestors };
       }),
       breakdown: [...clientBreakdown(attributed)].map(([name, count]) => ({ name, count })),
     });
