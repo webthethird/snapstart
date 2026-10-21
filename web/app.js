@@ -168,7 +168,10 @@ function threadEl(group) {
       gone.textContent = `earlier casts in this thread are no longer on this node (fid ${n.fid})`;
       return gone;
     }
-    return castEl(n, { actions: inFeed.has(n.hash), context: !inFeed.has(n.hash) });
+    // Every cast is actionable, whether or not it came from your own feed —
+    // a thread you were pulled into is exactly where you want to reply-react.
+    // `context` only controls how it looks.
+    return castEl(n, { actions: true, context: !inFeed.has(n.hash) });
   };
 
   // The cast that started the thread sits flush with every other top-level cast
@@ -374,6 +377,14 @@ function quoteEl(q) {
 
   const media = embedsEl(q.embeds);
   if (media) card.append(media);
+
+  const bar = document.createElement("div");
+  bar.className = "actions";
+  bar.append(
+    actionButton("♡ like", () => react(q, "like")),
+    actionButton("↻ recast", () => react(q, "recast")),
+  );
+  card.append(bar);
   return card;
 }
 
