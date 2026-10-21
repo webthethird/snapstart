@@ -287,6 +287,26 @@ const server = createServer((req, res) => {
   });
 });
 
+// Without this, a port clash surfaces as an unhandled 'error' event and a Node
+// stack trace — which is what a second `client ui`, or anything else already on
+// this port, actually looks like to someone following the tutorial.
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `\n  Port ${PORT} is already in use.\n\n` +
+        `  The client is probably already running — try http://${HOST}:${PORT} first.\n` +
+        `  Otherwise stop whatever holds the port, or pick another:\n\n` +
+        `    SNAPSTART_UI_PORT=4174 ./snapstart client ui\n`,
+    );
+    process.exit(1);
+  }
+  if (err.code === "EACCES") {
+    console.error(`\n  Not allowed to bind port ${PORT}. Pick one above 1024.\n`);
+    process.exit(1);
+  }
+  throw err;
+});
+
 server.listen(PORT, HOST, async () => {
   console.log(`\n  snapstart client  →  http://${HOST}:${PORT}\n`);
   console.log(`  node      ${process.env.SNAPCHAIN_URL ?? DEFAULT_NODE_URL}`);
