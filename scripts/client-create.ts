@@ -11,6 +11,7 @@
 import { appendFile, readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { stdin, stdout } from "node:process";
+import { mnemonicToAccount } from "viem/accounts";
 import { Snapchain } from "./snapchain.js";
 import { registerAppKey } from "./register-key.js";
 
@@ -103,7 +104,36 @@ if (mnemonic.split(/\s+/).length < 12) {
   process.exit(1);
 }
 
-// --- 4. issue, submit, and confirm it actually landed ----------------------
+// --- 4. does this seed actually control that account? ----------------------
+
+// Checked before submitting, because the failure is otherwise indistinguishable
+// from a network problem: the node accepts the message, returns 200, gossips it,
+// and a validator silently drops it for a bad signature. You wait 20 seconds and
+// are told the key "never landed", which points at the node rather than the seed.
+const custody = mnemonicToAccount(mnemonic).address;
+let custodiedFid: number | undefined;
+try {
+  custodiedFid = (await node.onChainIdRegistryEventByAddress(custody)).fid;
+} catch {
+  custodiedFid = undefined;
+}
+
+if (custodiedFid !== fid) {
+  console.error(
+    `\n  That seed phrase does not control fid ${fid}.\n\n` +
+      `    the seed controls   ${custody}\n` +
+      (custodiedFid
+        ? `    which custodies     fid ${custodiedFid}\n`
+        : `    which custodies     no fid\n`) +
+      `\n  Nothing was submitted. Either run this for fid ${custodiedFid ?? "<the right one>"},\n` +
+      `  or use the seed phrase whose address custodies fid ${fid}.\n\n` +
+      `  If the account was transferred to a new custody address, the phrase you\n` +
+      `  need is the one for that address, not the one it was created with.\n`,
+  );
+  process.exit(1);
+}
+
+// --- 5. issue, submit, and confirm it actually landed ----------------------
 
 console.log("\n  Issuing an app key and submitting it…");
 const started = Date.now();
@@ -123,7 +153,7 @@ if (!key.confirmed) {
 console.log(`  confirmed in ${elapsed}s`);
 console.log(`  public key   ${key.publicKeyHex}`);
 
-// --- 5. persist the key, never the phrase ----------------------------------
+// --- 6. persist the key, never the phrase ----------------------------------
 
 const existing = await readFile(ENV_PATH, "utf8").catch(() => "");
 if (/^APP_KEY_PRIVATE=/m.test(existing)) {

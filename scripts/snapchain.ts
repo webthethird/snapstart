@@ -238,6 +238,20 @@ export class Snapchain {
     return this.get<{ signer?: Signer }>("/v1/signer", { fid, signer });
   }
 
+  /**
+   * Which FID an address custodies, straight from the node's synced IdRegistry
+   * events. Lets a client check that a seed phrase actually controls the account
+   * it is about to authorize, without reaching for an Optimism RPC.
+   *
+   * Returns a 404-ish error when the address custodies nothing.
+   */
+  onChainIdRegistryEventByAddress(address: string) {
+    return this.get<{
+      fid?: number;
+      idRegisterEventBody?: { to?: string; eventType?: string };
+    }>("/v1/onChainIdRegistryEventByAddress", { address });
+  }
+
   /** Signers registered the old way, via an Optimism transaction to the KeyRegistry. */
   onChainSignersByFid(fid: number) {
     return this.get<{ events: unknown[] }>("/v1/onChainSignersByFid", { fid });
