@@ -245,7 +245,7 @@ ul.plain li{margin:.35rem 0}
 
     <div class="grid g4" style="margin-top:2rem">
       <div class="card"><div class="k">Cost</div><div class="v">~$10<small>/day</small></div><p>Hourly billing. Destroy it when you're done.</p></div>
-      <div class="card"><div class="k">First sync</div><div class="v">~13<small> hours</small></div><p>Docs say two. One full restore, timed end to end: 13h&thinsp;22m.</p></div>
+      <div class="card"><div class="k">First sync</div><div class="v">9&ndash;14<small> hours</small></div><p>Docs say two. Two restores timed end to end: 13h&thinsp;22m and 9h&thinsp;09m, same instance type.</p></div>
       <div class="card"><div class="k">API keys</div><div class="v">Zero</div><p>The node holds no credentials once running.</p></div>
       <div class="card"><div class="k">Licence</div><div class="v">MIT</div><p>Every number here measured on a live node.</p></div>
     </div>
@@ -265,9 +265,9 @@ ul.plain li{margin:.35rem 0}
       longer exists.
     </p>
     <div class="grid g3" style="margin-top:1.8rem">
-      <div class="card"><div class="k">Restore takes</div><div class="v">10&ndash;15<small> hours</small></div><p>5,692 chunks. Measured on an m5.xlarge with gp3: download 9&ndash;19 chunks/min, unzip 1.45&thinsp;s/chunk, unpack 62&thinsp;MB/s.</p></div>
+      <div class="card"><div class="k">Restore takes</div><div class="v">9&ndash;14<small> hours</small></div><p>5,692 chunks. Two runs on an m5.xlarge with gp3: 13h&thinsp;22m and 9h&thinsp;09m. Download throughput is what varies.</p></div>
       <div class="card"><div class="k">At risk</div><div class="v">shard 0</div><p>Restored last, so it has waited the longest. It is also the smallest &mdash; 371 chunks, about 30&thinsp;GB.</p></div>
-      <div class="card"><div class="k">Failure signature</div><div class="v mono" style="font-size:.95rem">404, then panic</div><p>Repeated <code>Failed to download</code>, then a panic at <code>src/main.rs:422:22</code>.</p></div>
+      <div class="card"><div class="k">Failure signature</div><div class="v mono" style="font-size:.95rem">404s, then panic</div><p>Repeated <code>Failed to download</code>. The panic that follows is not unique to this &mdash; see below.</p></div>
     </div>
 
     <h3 style="color:#fff;margin-top:2.4rem">What we measured, and what we did not</h3>
@@ -330,6 +330,32 @@ done</code></pre>
     <p class="narrow" style="color:#c9c5c0">
       A node that loses this race fails loudly. What is quiet is the aftermath: it
       still answers reads, so it looks healthy while rejecting every write.
+    </p>
+
+    <h3 style="color:#fff;margin-top:2.4rem">A panic does not mean you lost the race</h3>
+    <p class="narrow" style="color:#c9c5c0">
+      We assumed for two days that the panic at the end of a restore was this bug.
+      It is not. <strong>Every</strong> successful restore ends in a panic, for an
+      unrelated reason, and the two look identical from the outside.
+    </p>
+<pre><code>called `Result::unwrap()` on an `Err` value:
+  IoError(Os { code: 16, kind: ResourceBusy, message: "Device or resource busy" })</code></pre>
+    <p class="narrow" style="color:#c9c5c0">
+      <code>download_snapshots</code> finishes by calling
+      <code>remove_dir_all</code> on its staging directory, which deletes the
+      contents and then the directory itself &mdash; but
+      <code>.rocks.snapshot</code> is a bind mount in snapchain's own compose
+      file, and removing a mount point returns <code>EBUSY</code>. That error
+      reaches the same <code>.unwrap()</code> a rotation 404 would, so both
+      produce the same crash at the same line.
+    </p>
+    <p class="narrow" style="color:#c9c5c0">
+      It is invisible in the documented setup: the restart policy brings the node
+      back, it finds a complete database, and it serves. Run without one and the
+      process exits non-zero after a 9&ndash;14 hour restore with a perfectly good
+      database on disk. We reproduced it on two nodes, the second with zero 404s,
+      and reported it as
+      <a href="https://github.com/farcasterxyz/snapchain/issues/1076" style="color:#a991ff">snapchain#1076</a>.
     </p>
   </div>
 </section>
@@ -647,7 +673,7 @@ thread 'main' panicked at src/main.rs:422</code></pre>
     <p class="eyebrow">Honest limitations</p>
     <h2>Worth knowing before you spend a day on this.</h2>
     <ul class="plain narrow">
-      <li>The restore took <strong>13h&thinsp;22m</strong> on our node, and interruption is worse than it sounds. A restart does not resume a shard whose snapshot download failed &mdash; it sees a non-empty <code>.rocks</code>, skips the snapshot, and starts syncing that shard from genesis, which takes weeks. You have to reload that shard deliberately. <a href="https://github.com/farcasterxyz/snapchain/issues/1044">snapchain#1044</a>.</li>
+      <li>The restore took <strong>13h&thinsp;22m</strong> and <strong>9h&thinsp;09m</strong> on two runs, and interruption is worse than it sounds. A restart does not resume a shard whose snapshot download failed &mdash; it sees a non-empty <code>.rocks</code>, skips the snapshot, and starts syncing that shard from genesis, which takes weeks. You have to reload that shard deliberately. <a href="https://github.com/farcasterxyz/snapchain/issues/1044">snapchain#1044</a>.</li>
       <li>It needs <strong>2&nbsp;TB</strong> at peak for a database that settles around 557&nbsp;GB, because snapshot staging is not reclaimed until the end. <a href="https://github.com/farcasterxyz/snapchain/pull/1046">We proposed a fix.</a></li>
       <li>Writing through someone else's validator is not an option — they require authentication. Your own read node is the only keyless write path.</li>
       <li>This is a tutorial client, not a product. It reads a feed, posts, follows, reacts and filters by source. It is not trying to be Warpcast.</li>
