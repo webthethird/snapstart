@@ -376,6 +376,26 @@ provision_hetzner() {
   key_id=$(find_or_create ssh_keys \
     "$(jq -n --arg n "$NAME" --arg k "$(cat "$SSH_KEY.pub")" '{name:$n,public_key:$k}')")
 
+  # Hetzner enforces uniqueness on the key MATERIAL, not the name. find_or_create
+  # looks up by name, so a second node reusing this checkout's keypair is rejected
+  # for a key that is already registered under the first node's name. Reuse it.
+  if [ -z "$key_id" ] || [ "$key_id" = "null" ]; then
+    local want
+    want=$(awk '{print $1" "$2}' "$SSH_KEY.pub")
+    key_id=$(api GET "/ssh_keys" \
+      | jq -r --arg k "$want" \
+          '.ssh_keys[] | select((.public_key | split(" ") | .[0:2] | join(" ")) == $k) | .id' \
+      | head -1)
+    [ -n "$key_id" ] && info "ssh key (already registered under another name)"
+  fi
+
+  # Without this the empty id lands in the server payload as invalid JSON, and
+  # Hetzner answers "can not read request body" — which says nothing about keys.
+  case "$key_id" in
+    ''|null|*[!0-9]*) die "could not register or find this checkout's ssh key on Hetzner.
+Check that $SSH_KEY.pub exists and that your token has write access." ;;
+  esac
+
   # The docs say to expose 3381-3383 on both TCP and UDP. Checking what actually
   # listens on a running node, only three of those six combinations are used:
   #
@@ -419,6 +439,18 @@ runcmd:
       public_net:{enable_ipv4:true,enable_ipv6:true},
       user_data:$ud
     }')")
+
+  # Same cascade as the ssh key: an empty id becomes invalid JSON two lines down
+  # and the real error — no capacity, a bad type, a quota — is lost behind a jq
+  # parse failure.
+  case "$server_id" in
+    ''|null|*[!0-9]*) die "Hetzner did not create a server (see the API error above).
+
+If it says \"error during placement\", that location is out of capacity for
+$SERVER_TYPE. Try another:
+
+    SNAPSTART_PROVIDER=hetzner SNAPSTART_LOCATION=nbg1 ./snapstart provision" ;;
+  esac
 
   # Persist the server id immediately. Everything after this — IP assignment,
   # volume creation, the quota check — can fail, and the server bills regardless.
@@ -780,16 +812,71 @@ cmd_node_ready() {
 # the firewall.
 # Issues this client its own app key. The seed phrase is prompted for, used
 # once, and never written anywhere — only the resulting Ed25519 key is saved.
+# --- making "three commands" actually be three -------------------------------
+#
+# `client create` used to refuse unless you had already run `npm install` and
+# left `./snapstart tunnel` running in a second terminal, then finished by
+# telling you to run `./snapstart client ui`. That is four actions wearing one
+# command's name, and the README promised three. These helpers let the third
+# command do the whole job.
+
+TUNNEL_PID_FILE="$STATE_DIR/tunnel.pid"
+
+ensure_deps() {
+  [ -d node_modules ] && return 0
+  need npm
+  info "installing client dependencies (first run only)"
+  npm install --silent >/dev/null 2>&1 || die "npm install failed. Run it directly to see why."
+}
+
+node_reachable() { curl -s --max-time 3 http://127.0.0.1:3381/v1/info >/dev/null 2>&1; }
+
+# Open the SSH tunnel ourselves, in the background, rather than making the user
+# hold a terminal open for it.
+ensure_tunnel() {
+  node_reachable && return 0
+  need jq
+  [ -f "$STATE_FILE" ] || die "nothing provisioned yet. Run ./snapstart provision"
+  local ip; ip=$(jq -r .ip "$STATE_FILE")
+  info "opening the tunnel to $ip in the background"
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+      -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
+      -f -N -L 3381:localhost:3381 "$(node_user)@$ip" \
+    || die "could not open the tunnel to $ip. Is the node running? ./snapstart node status"
+
+  pgrep -f "3381:localhost:3381 $(node_user)@$ip" > "$TUNNEL_PID_FILE" 2>/dev/null || true
+
+  # Forwarding is established before the node necessarily answers, so wait for a
+  # real reply rather than assuming ssh returning 0 means ready.
+  local i=0
+  while [ "$i" -lt 15 ]; do
+    node_reachable && { info "tunnel up"; return 0; }
+    sleep 1; i=$((i + 1))
+  done
+  die "the tunnel opened but the node is not answering on 127.0.0.1:3381.
+Still restoring? ./snapstart node status"
+}
+
+open_browser() {
+  local url="$1"
+  if command -v open >/dev/null 2>&1; then open "$url" >/dev/null 2>&1 &
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 &
+  fi
+}
+
 cmd_client_create() {
   command -v node >/dev/null || die "node is required"
-  if ! curl -s --max-time 3 http://127.0.0.1:3381/v1/info >/dev/null 2>&1; then
-    die "Nothing is answering on 127.0.0.1:3381.
+  ensure_deps
+  ensure_tunnel
 
-Open the tunnel in another terminal first:
+  # Only launch the client if a key was actually issued. A custody mismatch or a
+  # node that is not ready exits non-zero here, and opening a browser onto a
+  # client that cannot post would bury that.
+  npm run --silent client-create || exit $?
 
-    ./snapstart tunnel"
-  fi
-  exec npm run --silent client-create
+  info ""
+  info "starting the client"
+  cmd_client_ui
 }
 
 # The UI runs HERE, on your machine, bound to 127.0.0.1. It reaches the node
@@ -798,10 +885,9 @@ Open the tunnel in another terminal first:
 cmd_client_ui() {
   need npx
   command -v node >/dev/null || die "node is required for the client UI"
-  if ! curl -s --max-time 3 http://127.0.0.1:3381/v1/info >/dev/null 2>&1; then
-    info "note: nothing is answering on 127.0.0.1:3381 — open ./snapstart tunnel in another"
-    info "      terminal, or the UI will start but show the node as unreachable"
-  fi
+  ensure_deps
+  ensure_tunnel
+  open_browser "http://127.0.0.1:${SNAPSTART_UI_PORT:-4173}"
   exec npm run --silent ui
 }
 
@@ -869,6 +955,14 @@ cmd_ssh() {
     "$(node_user)@$(jq -r .ip "$STATE_FILE")" "$@"
 }
 
+stop_tunnel() {
+  [ -f "$TUNNEL_PID_FILE" ] || return 0
+  local pid; pid=$(cat "$TUNNEL_PID_FILE" 2>/dev/null)
+  case "$pid" in ''|*[!0-9]*) rm -f "$TUNNEL_PID_FILE"; return 0 ;; esac
+  kill "$pid" 2>/dev/null && info "closed the background tunnel"
+  rm -f "$TUNNEL_PID_FILE"
+}
+
 cmd_destroy() {
   need jq
   [ -f "$STATE_FILE" ] || die "nothing to destroy."
@@ -885,6 +979,7 @@ cmd_destroy() {
   echo "The restored database goes with it — a fresh node re-syncs from scratch."
   read -rp "Type the server name ($NAME) to confirm: " confirm
   [ "$confirm" = "$NAME" ] || die "aborted."
+  stop_tunnel
   case "$(jq -r '.provider // "hetzner"' "$STATE_FILE")" in
     aws) destroy_aws ;;
     *)   destroy_hetzner ;;

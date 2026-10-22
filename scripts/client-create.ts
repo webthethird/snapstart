@@ -168,4 +168,4 @@ if (/^APP_KEY_PRIVATE=/m.test(existing)) {
   console.log("  saved to .env (gitignored)");
 }
 
-console.log("\n  Done. Start the client:\n\n    ./snapstart client ui\n");
+console.log("\n  Done.");
