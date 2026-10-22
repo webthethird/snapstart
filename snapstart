@@ -20,7 +20,8 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 STATE_DIR=".state"
-SSH_KEY="$STATE_DIR/id_snapstart"
+# Overridable because a server you provisioned yourself already has its own key.
+SSH_KEY="${SNAPSTART_SSH_KEY:-$STATE_DIR/id_snapstart}"
 API="https://api.hetzner.cloud/v1"
 
 # Resource names. Reused on re-runs, which is what makes this idempotent:
@@ -115,7 +116,30 @@ die() { echo "error: $*" >&2; exit 1; }
 info() { echo "  $*"; }
 
 need() {
-  command -v "$1" >/dev/null 2>&1 || die "$1 is required but not installed."
+  command -v "$1" >/dev/null 2>&1 && return 0
+  local hint=""
+  case "$1" in
+    aws) hint="
+
+The AWS CLI runs on YOUR machine, not on the server — snapstart calls it from
+here to create the instance. Installing it on the server does not help.
+
+  macOS   brew install awscli
+  Linux   https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+
+No AWS account? Either of these works instead:
+
+  SNAPSTART_PROVIDER=hetzner ./snapstart provision
+  SNAPSTART_PROVIDER=byo SNAPSTART_HOST=<ip> ./snapstart provision   # a server you already have" ;;
+    jq)  hint="
+
+  macOS   brew install jq
+  Linux   sudo apt-get install -y jq" ;;
+    gcloud) hint="
+
+  https://cloud.google.com/sdk/docs/install" ;;
+  esac
+  die "$1 is required but not installed.$hint"
 }
 
 load_token() {
@@ -181,7 +205,8 @@ cmd_provision() {
   case "$PROVIDER" in
     aws)     provision_aws "$@" ;;
     hetzner) provision_hetzner "$@" ;;
-    *) die "unknown SNAPSTART_PROVIDER '$PROVIDER' (expected aws or hetzner)" ;;
+    byo)     provision_byo "$@" ;;
+    *) die "unknown SNAPSTART_PROVIDER '$PROVIDER' (expected aws, hetzner or byo)" ;;
   esac
 }
 
@@ -624,6 +649,7 @@ node_user() {
   [ -f "$STATE_FILE" ] || { echo root; return; }
   case "$(jq -r '.provider // "hetzner"' "$STATE_FILE")" in
     aws) echo ubuntu ;;
+    byo) jq -r '.user // "root"' "$STATE_FILE" 2>/dev/null ;;
     *)   echo root ;;
   esac
 }
@@ -963,6 +989,94 @@ stop_tunnel() {
   rm -f "$TUNNEL_PID_FILE"
 }
 
+# --- bring your own server ---------------------------------------------------
+#
+# For anyone whose credits are somewhere we do not script: GCP, Azure, a VPS, a
+# machine under a desk. You create the server; this adopts it, checks it can
+# actually do the job, and every later command works unchanged.
+#
+# The honest trade: command 0 is yours rather than ours, so this path is two
+# scripted commands plus a server you made.
+provision_byo() {
+  need ssh; need jq
+  local host="${SNAPSTART_HOST:-}"
+  [ -n "$host" ] || die "set SNAPSTART_HOST to the server's public IP:
+
+    SNAPSTART_PROVIDER=byo SNAPSTART_HOST=203.0.113.10 ./snapstart provision
+
+Optional: SNAPSTART_USER (default $(id -un)), SNAPSTART_SSH_KEY (default $SSH_KEY)."
+
+  local user="${SNAPSTART_USER:-$(id -un)}"
+  [ -f "$SSH_KEY" ] || die "no ssh key at $SSH_KEY. Point SNAPSTART_SSH_KEY at the one for this server."
+
+  local ssh_opts=(-i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15)
+
+  info "checking ssh to $user@$host"
+  ssh "${ssh_opts[@]}" "$user@$host" true 2>/dev/null \
+    || die "cannot ssh to $user@$host with $SSH_KEY.
+
+  ssh -i $SSH_KEY $user@$host
+
+If that works and this does not, the difference is usually the user name:
+GCP images often use your Google account name, not 'ubuntu' or 'root'."
+
+  # sudo without a password, because every later step needs it unattended.
+  ssh "${ssh_opts[@]}" "$user@$host" "sudo -n true" 2>/dev/null \
+    || die "$user cannot run sudo without a password on $host, which the node setup needs."
+
+  info "checking docker"
+  if ! ssh "${ssh_opts[@]}" "$user@$host" "command -v docker >/dev/null" 2>/dev/null; then
+    info "installing docker"
+    ssh "${ssh_opts[@]}" "$user@$host" "curl -fsSL https://get.docker.com | sudo sh" >/dev/null 2>&1 \
+      || die "could not install docker on $host. Install it yourself and re-run."
+    ssh "${ssh_opts[@]}" "$user@$host" "sudo usermod -aG docker $user" >/dev/null 2>&1 || true
+  fi
+
+  info "checking space for the database"
+  ssh "${ssh_opts[@]}" "$user@$host" \
+    "sudo mkdir -p /mnt/snapchain && sudo chown \$(id -u):\$(id -g) /mnt/snapchain" 2>/dev/null \
+    || die "could not create /mnt/snapchain on $host"
+
+  local free_gb
+  free_gb=$(ssh "${ssh_opts[@]}" "$user@$host" \
+    "df -PBG /mnt/snapchain | awk 'NR==2{gsub(/G/,\"\",\$4); print \$4}'" 2>/dev/null)
+  case "$free_gb" in ''|*[!0-9]*) free_gb=0 ;; esac
+  info "free on /mnt/snapchain: ${free_gb} GB"
+
+  # Measured: the restore peaks near 1,550 GB before staging is reclaimed, and
+  # the database settles around 560 GB. Below ~1,600 GB it will run out partway.
+  if [ "$free_gb" -lt 1600 ]; then
+    info ""
+    info "  WARNING: a first sync peaks near 1,550 GB before it settles at ~560 GB."
+    info "  With ${free_gb} GB free this will probably fill the disk partway through."
+    info "  Attach more storage at /mnt/snapchain, or expect it to fail."
+    info ""
+  fi
+
+  mkdir -p "$STATE_DIR"
+  jq -n --arg provider byo --arg ip "$host" --arg user "$user" --arg key "$SSH_KEY" \
+       --argjson free "$free_gb" \
+    '{provider:$provider,ip:$ip,user:$user,ssh_key:$key,free_gb:$free}' \
+    > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+  info ""
+  info "adopted. details in $STATE_FILE"
+  info ""
+  printf "  %-12s %s\n" "provider" "byo (you own this server)"
+  printf "  %-12s %s\n" "ip" "$host"
+  printf "  %-12s %s\n" "user" "$user"
+  printf "  %-12s %s\n" "data dir" "/mnt/snapchain"
+  info ""
+  info "next: ./snapstart node up"
+}
+
+destroy_byo() {
+  info "this server is yours, so snapstart will not delete it."
+  info "removing the local record only; the machine keeps running."
+  rm -f "$STATE_FILE"
+  info "done. Delete the server in your provider's console when you are finished."
+}
+
 cmd_destroy() {
   need jq
   [ -f "$STATE_FILE" ] || die "nothing to destroy."
@@ -982,6 +1096,7 @@ cmd_destroy() {
   stop_tunnel
   case "$(jq -r '.provider // "hetzner"' "$STATE_FILE")" in
     aws) destroy_aws ;;
+    byo) destroy_byo ;;
     *)   destroy_hetzner ;;
   esac
 }
