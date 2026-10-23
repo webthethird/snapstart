@@ -8,6 +8,13 @@ Run your own Farcaster read node and a client that talks to it, in three command
 ./snapstart client create  # (2) issue an app key and launch the client
 ```
 
+> **Run the three commands on your own machine**, not on a server. You do not need
+> to create anything in the cloud console first — that is what `provision` does.
+> Standing up an instance by hand, SSHing in, and running the commands there is the
+> common first-run failure: `provision` refuses (`aws is required but not installed`)
+> because the AWS CLI belongs on the machine doing the provisioning, not the one
+> being provisioned — and the hand-made instance bills you for nothing.
+
 The node runs on infrastructure you own and needs **no API keys from anyone** — no
 RPC endpoint, no hosted data provider, no signup. Once it is running it holds no
 credentials at all.
