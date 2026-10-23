@@ -58,19 +58,79 @@ try {
   process.exit(1);
 }
 
-const shards = (info as { shardInfos?: { shardId: number; blockDelay: number }[] }).shardInfos ?? [];
+type ShardInfo = { shardId: number; blockDelay: number };
+const shardsOf = (i: unknown) => ((i as { shardInfos?: ShardInfo[] }).shardInfos ?? []);
+
+const shards = shardsOf(info);
 const worstDelay = shards.reduce((m, s) => Math.max(m, s.blockDelay), 0);
 const hasShardZero = shards.some((s) => s.shardId === 0);
 
 if (!hasShardZero || worstDelay >= 100) {
-  console.error("\nYour node is serving but not ready.\n");
-  for (const s of [...shards].sort((a, b) => a.shardId - b.shardId)) {
-    console.error(`  shard ${s.shardId}: block delay ${s.blockDelay}`);
-  }
+  // The node answers /v1/info as soon as the snapshot is unpacked, but the
+  // snapshot is hours old by the time it finishes — so it then replays blocks
+  // up to the tip. That gap is invisible unless you say so, and it is the point
+  // where a restore that worked perfectly looks broken.
   console.error(
-    "\nApp key registration routes to shard 0, so a missing or lagging shard means\n" +
-      "every write is rejected while reads keep working. Check ./snapstart node ready\n",
+    "\n  Your node is serving, but it has not caught up to the network yet.\n\n" +
+      "  The snapshot it restored was already several hours old when the restore\n" +
+      "  finished, so it is now replaying blocks to reach the tip. Nothing is wrong;\n" +
+      "  it just is not usable yet.\n",
   );
+
+  // A second sample turns "it is behind" into "it is behind, and here is when
+  // that stops being true".
+  const SAMPLE_MS = 12_000;
+  // A plain line, not an erased progress indicator: carriage returns are literal
+  // once this is piped to a file or a log, and the half-erased line is worse
+  // than no animation.
+  console.error(`  measuring how fast it is catching up (${SAMPLE_MS / 1000}s)\u2026\n`);
+  await new Promise((r) => setTimeout(r, SAMPLE_MS));
+  let later: ShardInfo[] = [];
+  try {
+    later = shardsOf(await node.info());
+  } catch {
+    // Fall through: still worth printing the delays we have.
+  }
+  let slowestEtaMin = 0;
+  let anyStalled = false;
+  for (const s of [...shards].sort((a, b) => a.shardId - b.shardId)) {
+    const then = later.find((l) => l.shardId === s.shardId);
+    if (s.blockDelay < 100) {
+      console.error(`  shard ${s.shardId}: at the tip`);
+      continue;
+    }
+    const rate = then ? (s.blockDelay - then.blockDelay) / (SAMPLE_MS / 1000) : 0;
+    if (rate <= 0) {
+      anyStalled = true;
+      console.error(`  shard ${s.shardId}: ${s.blockDelay} blocks behind, not catching up`);
+      continue;
+    }
+    const etaMin = (then!.blockDelay - 100) / rate / 60;
+    slowestEtaMin = Math.max(slowestEtaMin, etaMin);
+    console.error(
+      `  shard ${s.shardId}: ${then!.blockDelay} blocks behind, ` +
+        `closing ${rate.toFixed(1)}/s, about ${Math.max(1, Math.round(etaMin))} min`,
+    );
+  }
+
+  if (!hasShardZero) {
+    console.error(
+      "\n  Shard 0 is missing entirely, which is different from being behind.\n" +
+        "  App key registration routes there, so no key can be issued until it exists.\n",
+    );
+  } else if (anyStalled) {
+    console.error(
+      "\n  A shard that is not closing the gap usually means no gossip peers.\n" +
+        "  Check ./snapstart node status\n",
+    );
+  } else {
+    const t = new Date(Date.now() + slowestEtaMin * 60_000);
+    console.error(
+      `\n  Try again in about ${Math.max(1, Math.round(slowestEtaMin))} minutes ` +
+        `(around ${t.toTimeString().slice(0, 5)} local).\n\n` +
+        "  Watch it close:  ./snapstart node ready\n",
+    );
+  }
   process.exit(1);
 }
 
