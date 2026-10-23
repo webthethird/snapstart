@@ -123,6 +123,20 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .embed-link:hover { text-decoration: underline; }
 .embed-quote { margin: 0; font-size: .8rem; color: var(--muted); font-style: italic; }
 
+.reply-box {
+  margin: .5rem 0 .2rem; padding: .7rem .8rem;
+  border: 1px solid var(--rule); border-radius: 10px; background: var(--bg);
+}
+.reply-to { font-size: .8rem; color: var(--muted); margin-bottom: .4rem; }
+.reply-box textarea {
+  width: 100%; resize: vertical; font: inherit; padding: .5rem .6rem;
+  color: var(--fg); background: var(--panel);
+  border: 1px solid var(--rule); border-radius: 7px;
+}
+.reply-bar { display: flex; align-items: center; gap: .5rem; margin-top: .5rem; }
+.reply-bar .hint { margin-right: auto; }
+.actions button.active { border-color: var(--accent); color: var(--accent); }
+
 .show-more {
   display: inline; background: none; border: 0; padding: 0;
   color: var(--accent); font: inherit; font-weight: 500; cursor: pointer;

@@ -378,14 +378,101 @@ function quoteEl(q) {
   const media = embedsEl(q.embeds);
   if (media) card.append(media);
 
+  actionBar(q, card);
+  return card;
+}
+
+/**
+ * An inline reply box, opened under the cast being answered.
+ *
+ * A reply is just a cast carrying parentCastId, so this posts to the same
+ * endpoint as the composer at the top; the only difference is the parent.
+ */
+function replyBox(target, onDone) {
+  const box = document.createElement("div");
+  box.className = "reply-box";
+
+  const to = document.createElement("div");
+  to.className = "reply-to";
+  to.textContent = `Replying to @${target.author}`;
+
+  const ta = document.createElement("textarea");
+  ta.rows = 3;
+  ta.placeholder = "Your reply. Signed by your app key, submitted through your own node.";
+
+  const bar = document.createElement("div");
+  bar.className = "reply-bar";
+  const count = document.createElement("span");
+  count.className = "hint";
+  count.textContent = "0 / 320";
+  const cancel = document.createElement("button");
+  cancel.className = "ghost";
+  cancel.textContent = "Cancel";
+  const send = document.createElement("button");
+  send.textContent = "Reply";
+
+  ta.addEventListener("input", () => { count.textContent = `${ta.value.length} / 320`; });
+  cancel.onclick = () => onDone();
+
+  send.onclick = async () => {
+    const text = ta.value.trim();
+    if (!text) return;
+    send.disabled = true; cancel.disabled = true;
+    try {
+      const r = await api("/api/cast", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, parent: { fid: target.fid, hash: target.hash } }),
+      });
+      if (r.confirmed) {
+        toast(`Reply confirmed in ${(r.elapsedMs / 1000).toFixed(1)}s`);
+        onDone();
+        setTimeout(loadFeed, 1200);
+      } else {
+        toast("Submitted, but not confirmed within 20s", true);
+        send.disabled = false; cancel.disabled = false;
+      }
+    } catch (e) {
+      toast(e.message, true);
+      send.disabled = false; cancel.disabled = false;
+    }
+  };
+
+  bar.append(count, cancel, send);
+  box.append(to, ta, bar);
+  setTimeout(() => ta.focus(), 0);   // focus only once it is in the document
+  return box;
+}
+
+/** The action bar. Shared, so a quoted cast cannot end up with fewer verbs than a top-level one. */
+function actionBar(c, mount) {
   const bar = document.createElement("div");
   bar.className = "actions";
+
+  // Reply toggles a composer rather than firing an action, so it is a plain
+  // button: actionButton disables itself and reports a confirmation, which is
+  // the wrong shape for opening a form.
+  const replyBtn = document.createElement("button");
+  replyBtn.textContent = "↩ reply";
+  let openBox = null;
+  const closeBox = () => {
+    if (openBox) openBox.remove();
+    openBox = null;
+    replyBtn.classList.remove("active");
+  };
+  replyBtn.onclick = () => {
+    if (openBox) return closeBox();
+    openBox = replyBox(c, closeBox);
+    replyBtn.classList.add("active");
+    bar.after(openBox);
+  };
+
   bar.append(
-    actionButton("♡ like", () => react(q, "like")),
-    actionButton("↻ recast", () => react(q, "recast")),
+    replyBtn,
+    actionButton("♡ like", () => react(c, "like")),
+    actionButton("↻ recast", () => react(c, "recast")),
   );
-  card.append(bar);
-  return card;
+  mount.append(bar);
 }
 
 function castEl(c, { actions = true, context = false } = {}) {
@@ -429,15 +516,7 @@ function castEl(c, { actions = true, context = false } = {}) {
 
   for (const q of c.quotes ?? []) body.append(quoteEl(q));
 
-  if (actions) {
-    const bar = document.createElement("div");
-    bar.className = "actions";
-    bar.append(
-      actionButton("♡ like", () => react(c, "like")),
-      actionButton("↻ recast", () => react(c, "recast")),
-    );
-    body.append(bar);
-  }
+  if (actions) actionBar(c, body);
   return el;
 }
 

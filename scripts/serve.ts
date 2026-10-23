@@ -229,11 +229,25 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   if (!client) return send(res, 503, { error: "No app key configured. Run ./snapstart client create" });
 
   if (path === "/api/cast" && req.method === "POST") {
-    const { text } = await readJson(req);
+    const { text, parent } = await readJson(req);
     if (typeof text !== "string" || text.trim() === "") {
       return send(res, 400, { error: "empty cast" });
     }
-    return send(res, 200, await client.cast(text.trim()));
+
+    // A reply is a cast with parentCastId set — there is no separate message
+    // type for it. Validate the pair here rather than letting a half-specified
+    // parent reach the signer, where the error would be far less obvious.
+    let parentRef: { fid: number; hash: string } | undefined;
+    if (parent !== undefined && parent !== null) {
+      const p = parent as { fid?: unknown; hash?: unknown };
+      const fidNum = Number(p.fid);
+      if (!Number.isFinite(fidNum) || fidNum <= 0 || typeof p.hash !== "string" || !p.hash) {
+        return send(res, 400, { error: "parent must be { fid, hash }" });
+      }
+      parentRef = { fid: fidNum, hash: p.hash };
+    }
+
+    return send(res, 200, await client.cast(text.trim(), parentRef ? { parent: parentRef } : {}));
   }
 
   if (path === "/api/follow" && req.method === "POST") {
